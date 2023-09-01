@@ -2,6 +2,25 @@ use minifb::{Key, Window, WindowOptions};
 use std::time::{Duration, Instant};
 use libloading::Library;
 use libc::c_void;
+use libretro_sys::CoreAPI;
+use clap::Parser;
+
+#[derive(Parser)]
+struct EmulatorState {
+    #[arg(help = "Sets the path to the ROM file to load", index = 1)]
+    rom_name: String,
+    #[arg(short = 'L', default_value = "default_library")]
+    library_name: String,
+}
+
+fn parse_command_line_arguments() -> EmulatorState {
+    let emulator_state = EmulatorState::parse();
+
+    println!("ROM name: {}", emulator_state.rom_name);
+    println!("Core Library name: {}", emulator_state.library_name);
+    return emulator_state;
+}
+
 
 pub type EnvironmentCallback = unsafe extern "C" fn(command: libc::c_uint, data: *mut libc::c_void) -> bool;
 
@@ -11,19 +30,71 @@ unsafe extern "C" fn libretro_environment_callback(command: u32, data: *mut c_vo
 }
 const EXPECTED_LIB_RETRO_VERSION: u32 = 1;
 
-fn load_core() {
-    unsafe {
-        let core = Library::new("gambatte_libretro.dylib").expect("Failed to load Core");
-        let retro_init: unsafe extern "C" fn() = *(core.get(b"retro_init").unwrap());
-        let retro_api_version: unsafe extern "C" fn() -> libc::c_uint = *(core.get(b"retro_api_version").unwrap());
-        let retro_set_environment: unsafe extern "C" fn(callback: EnvironmentCallback) = *(core.get(b"retro_set_environment").unwrap());
-        let api_version = retro_api_version();
-        println!("API Version: {}", api_version);
-        if api_version != EXPECTED_LIB_RETRO_VERSION {
-            panic!("The Core has been compiled with a LibRetro API that is unexpected, we expected version to be: {} but it was: {}", EXPECTED_LIB_RETRO_VERSION, api_version)
-        }
-        retro_set_environment(libretro_environment_callback);
-        retro_init();
+struct Core {
+    dylib: Library,
+    api: CoreAPI
+}
+
+impl Core {
+    fn new() -> Self {
+        unsafe {
+            let dylib = Library::new("gambatte_libretro.dylib").expect("Failed to load Core");
+    
+            let core_api = CoreAPI {
+                retro_set_environment: *(dylib.get(b"retro_set_environment").unwrap()),
+                retro_set_video_refresh: *(dylib.get(b"retro_set_video_refresh").unwrap()),
+                retro_set_audio_sample: *(dylib.get(b"retro_set_audio_sample").unwrap()),
+                retro_set_audio_sample_batch: *(dylib.get(b"retro_set_audio_sample_batch").unwrap()),
+                retro_set_input_poll: *(dylib.get(b"retro_set_input_poll").unwrap()),
+                retro_set_input_state: *(dylib.get(b"retro_set_input_state").unwrap()),
+    
+                retro_init: *(dylib.get(b"retro_init").unwrap()),
+                retro_deinit: *(dylib.get(b"retro_deinit").unwrap()),
+    
+                retro_api_version: *(dylib.get(b"retro_api_version").unwrap()),
+    
+                retro_get_system_info: *(dylib.get(b"retro_get_system_info").unwrap()),
+                retro_get_system_av_info: *(dylib.get(b"retro_get_system_av_info").unwrap()),
+                retro_set_controller_port_device: *(dylib.get(b"retro_set_controller_port_device").unwrap()),
+    
+                retro_reset: *(dylib.get(b"retro_reset").unwrap()),
+                retro_run: *(dylib.get(b"retro_run").unwrap()),
+    
+                retro_serialize_size: *(dylib.get(b"retro_serialize_size").unwrap()),
+                retro_serialize: *(dylib.get(b"retro_serialize").unwrap()),
+                retro_unserialize: *(dylib.get(b"retro_unserialize").unwrap()),
+    
+                retro_cheat_reset: *(dylib.get(b"retro_cheat_reset").unwrap()),
+                retro_cheat_set: *(dylib.get(b"retro_cheat_set").unwrap()),
+    
+                retro_load_game: *(dylib.get(b"retro_load_game").unwrap()),
+                retro_load_game_special: *(dylib.get(b"retro_load_game_special").unwrap()),
+                retro_unload_game: *(dylib.get(b"retro_unload_game").unwrap()),
+    
+                retro_get_region: *(dylib.get(b"retro_get_region").unwrap()),
+                retro_get_memory_data: *(dylib.get(b"retro_get_memory_data").unwrap()),
+                retro_get_memory_size: *(dylib.get(b"retro_get_memory_size").unwrap()),
+            };
+    
+            let api_version = (core_api.retro_api_version)();
+            println!("API Version: {}", api_version);
+            if api_version != EXPECTED_LIB_RETRO_VERSION {
+                panic!("The Core has been compiled with a LibRetro API that is unexpected, we expected version to be: {} but it was: {}", EXPECTED_LIB_RETRO_VERSION, api_version)
+            }
+            (core_api.retro_set_environment)(libretro_environment_callback);
+            (core_api.retro_init)();
+            
+            // Construct and return a Core instance
+            Core {
+                dylib,
+                api: core_api
+            }
+    }
+}}
+
+impl Drop for Core {
+    fn drop(&mut self) {
+        // If you need to do any cleanup when the Core is dropped, do it here.
     }
 }
 
@@ -31,7 +102,10 @@ const WIDTH: usize = 640;
 const HEIGHT: usize = 480;
 
 fn main() {
-    load_core();
+    let core = Core::new();
+    unsafe {
+        (core.api.retro_init)();
+    }
 
     let mut buffer: Vec<u32> = vec![0; WIDTH * HEIGHT];
     let mut window = Window::new("Rust Game", WIDTH, HEIGHT, WindowOptions::default())
