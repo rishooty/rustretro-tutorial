@@ -1,8 +1,12 @@
 use minifb::{Key, Window, WindowOptions};
+use std::fs;
 use std::time::{Duration, Instant};
+use std::ffi::{c_void, CString};
+use std::ptr;
 use libloading::Library;
-use libc::c_void;
-use libretro_sys::CoreAPI;
+// use libc::c_void;
+use libretro_sys::{CoreAPI, ENVIRONMENT_GET_CAN_DUPE};
+use libretro_sys::GameInfo;
 use clap::Parser;
 
 #[derive(Parser)]
@@ -21,11 +25,38 @@ fn parse_command_line_arguments() -> EmulatorState {
     return emulator_state;
 }
 
+unsafe fn load_rom_file(core_api: &CoreAPI, rom_name: String) -> bool {
+    let rom_name_cptr = CString::new(rom_name.clone()).expect("Failed to create CString").as_ptr();
+    let contents = fs::read(rom_name).expect("Failed to read file");
+    let data: *const c_void = contents.as_ptr() as *const c_void;
+    let game_info = GameInfo {
+        path: rom_name_cptr,
+        data,
+        size: contents.len(),
+        meta: ptr::null(),
+    };
+    let was_load_successful = (core_api.retro_load_game)(&game_info);
+    if(!was_load_successful) {
+        panic!("Rom Load was not successful");
+    }
+    return was_load_successful;
+}
+
 
 pub type EnvironmentCallback = unsafe extern "C" fn(command: libc::c_uint, data: *mut libc::c_void) -> bool;
 
-unsafe extern "C" fn libretro_environment_callback(command: u32, data: *mut c_void) -> bool {
-    println!("libretro_environment_callbac Called with command: {}", command);
+unsafe extern "C" fn libretro_environment_callback(command: u32, return_data: *mut c_void) -> bool {
+    match command{
+        libretro_sys::ENVIRONMENT_GET_CAN_DUPE => {
+            *(return_data as *mut bool) = true; // Set the return_data to the value true
+            println!("ENVIRONMENT_GET_CAN_DUPE");
+        },
+        libretro_sys::ENVIRONMENT_SET_PIXEL_FORMAT => {
+            println!("TODO: Handle ENVIRONMENT_SET_PIXEL_FORMAT when we start drawing the the screen buffer");
+            return true;
+        }
+        _ => println!("libretro_environment_callback Called with command: {}", command)
+    }
     false
 }
 const EXPECTED_LIB_RETRO_VERSION: u32 = 1;
@@ -36,9 +67,9 @@ struct Core {
 }
 
 impl Core {
-    fn new() -> Self {
+    fn new(core_name : String) -> Self {
         unsafe {
-            let dylib = Library::new("gambatte_libretro.dylib").expect("Failed to load Core");
+            let dylib = Library::new(core_name).expect("Failed to load Core");
     
             let core_api = CoreAPI {
                 retro_set_environment: *(dylib.get(b"retro_set_environment").unwrap()),
@@ -102,10 +133,7 @@ const WIDTH: usize = 640;
 const HEIGHT: usize = 480;
 
 fn main() {
-    let core = Core::new();
-    unsafe {
-        (core.api.retro_init)();
-    }
+    let emulator_state = parse_command_line_arguments();
 
     let mut buffer: Vec<u32> = vec![0; WIDTH * HEIGHT];
     let mut window = Window::new("Rust Game", WIDTH, HEIGHT, WindowOptions::default())
@@ -120,6 +148,14 @@ fn main() {
 
     let mut fps_timer = Instant::now();
     let mut fps_counter: i32 = 0;
+
+    unsafe {
+        let core = Core::new(emulator_state.library_name);
+        let core_api = &core.api;
+        (core_api.retro_init)();
+        println!("About to load ROM: {}", emulator_state.rom_name);
+        load_rom_file(core_api, emulator_state.rom_name);
+    }
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         // Clear the previous pixel to black
