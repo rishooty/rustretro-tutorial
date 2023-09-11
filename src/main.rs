@@ -4,10 +4,38 @@ use std::time::{Duration, Instant};
 use std::ffi::{c_void, CString};
 use std::ptr;
 use libloading::Library;
-// use libc::c_void;
-use libretro_sys::{CoreAPI, ENVIRONMENT_GET_CAN_DUPE};
+use libretro_sys::CoreAPI;
 use libretro_sys::GameInfo;
 use clap::Parser;
+
+unsafe extern "C" fn libretro_set_video_refresh_callback(frame_buffer_data: *const libc::c_void, width: libc::c_uint, height: libc::c_uint, pitch: libc::size_t) {
+    if frame_buffer_data == ptr::null() {
+        println!("frame_buffer_data was null");
+        return;
+    }
+    println!("libretro_set_video_refresh_callback, width: {}, height: {}, pitch: {}", width, height, pitch);
+    let length_of_frame_buffer = width*height;
+    let slice = std::slice::from_raw_parts(frame_buffer_data as *const u8, length_of_frame_buffer as usize);
+    println!("Frame Buffer: {:?}", slice);
+}
+
+unsafe extern "C" fn libretro_set_input_poll_callback() {
+    println!("libretro_set_input_poll_callback")
+}
+
+unsafe extern "C" fn libretro_set_input_state_callback(port: libc::c_uint, device: libc::c_uint, index: libc::c_uint, id: libc::c_uint) -> i16 {
+    println!("libretro_set_input_state_callback");
+    return 0; // Hard coded 0 for now means nothing is pressed
+}
+
+unsafe extern "C" fn libretro_set_audio_sample_callback(left: i16, right: i16) {
+    println!("libretro_set_audio_sample_callback");
+}
+
+unsafe extern "C" fn libretro_set_audio_sample_batch_callback(data: *const i16, frames: libc::size_t) -> libc::size_t {
+    println!("libretro_set_audio_sample_batch_callback");
+    return 1;
+}
 
 #[derive(Parser)]
 struct EmulatorState {
@@ -141,7 +169,7 @@ fn main() {
             panic!("{}", e);
         });
 
-    //window.limit_update_rate(Some(std::time::Duration::from_micros(16600))); // ~60fps
+    window.limit_update_rate(Some(std::time::Duration::from_micros(16600))); // ~60fps
 
     let mut x: usize = 0;
     let mut y: usize = 0;
@@ -149,15 +177,26 @@ fn main() {
     let mut fps_timer = Instant::now();
     let mut fps_counter: i32 = 0;
 
+    let core = Core::new(emulator_state.library_name);
+    let core_api = &core.api;
+
     unsafe {
-        let core = Core::new(emulator_state.library_name);
-        let core_api = &core.api;
         (core_api.retro_init)();
+        (core_api.retro_set_video_refresh)(libretro_set_video_refresh_callback);
+        (core_api.retro_set_input_poll)(libretro_set_input_poll_callback);
+        (core_api.retro_set_input_state)(libretro_set_input_state_callback);
+        (core_api.retro_set_audio_sample)(libretro_set_audio_sample_callback);
+        (core_api.retro_set_audio_sample_batch)(libretro_set_audio_sample_batch_callback);
         println!("About to load ROM: {}", emulator_state.rom_name);
         load_rom_file(core_api, emulator_state.rom_name);
     }
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
+        // Call the libRetro core every frame
+        unsafe {
+            (core_api.retro_run)();
+        }
+
         // Clear the previous pixel to black
         buffer[y * WIDTH + x] = 0x00000000;
         fps_counter += 1;
