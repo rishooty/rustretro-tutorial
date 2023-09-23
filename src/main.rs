@@ -15,8 +15,11 @@ unsafe extern "C" fn libretro_set_video_refresh_callback(frame_buffer_data: *con
     }
     println!("libretro_set_video_refresh_callback, width: {}, height: {}, pitch: {}", width, height, pitch);
     let length_of_frame_buffer = width*height;
-    let slice = std::slice::from_raw_parts(frame_buffer_data as *const u8, length_of_frame_buffer as usize);
-    println!("Frame Buffer: {:?}", slice);
+    let buffer_slice = std::slice::from_raw_parts(frame_buffer_data as *const u8, length_of_frame_buffer as usize);
+    
+    let buffer_vec = Vec::from(buffer_slice);
+    CURRENT_EMULATOR_STATE.frame_buffer = Some(buffer_vec);
+    println!("Frame Buffer: {:?}", CURRENT_EMULATOR_STATE.frame_buffer)
 }
 
 unsafe extern "C" fn libretro_set_input_poll_callback() {
@@ -39,11 +42,18 @@ unsafe extern "C" fn libretro_set_audio_sample_batch_callback(data: *const i16, 
 
 #[derive(Parser)]
 struct EmulatorState {
-    #[arg(help = "Sets the path to the ROM file to load", index = 1)]
+    #[arg(help = "Sets the path to the ROM file to load", index = 2)]
     rom_name: String,
     #[arg(short = 'L', default_value = "default_library")]
     library_name: String,
+    frame_buffer: Option<Vec<u8>>,
 }
+
+static mut CURRENT_EMULATOR_STATE: EmulatorState = EmulatorState {
+    rom_name: String::new(),
+    library_name: String::new(),
+    frame_buffer: None,
+};
 
 fn parse_command_line_arguments() -> EmulatorState {
     let emulator_state = EmulatorState::parse();
@@ -53,7 +63,7 @@ fn parse_command_line_arguments() -> EmulatorState {
     return emulator_state;
 }
 
-unsafe fn load_rom_file(core_api: &CoreAPI, rom_name: String) -> bool {
+unsafe fn load_rom_file(core_api: &CoreAPI, rom_name: &String) -> bool {
     let rom_name_cptr = CString::new(rom_name.clone()).expect("Failed to create CString").as_ptr();
     let contents = fs::read(rom_name).expect("Failed to read file");
     let data: *const c_void = contents.as_ptr() as *const c_void;
@@ -95,7 +105,7 @@ struct Core {
 }
 
 impl Core {
-    fn new(core_name : String) -> Self {
+    fn new(core_name : &String) -> Self {
         unsafe {
             let dylib = Library::new(core_name).expect("Failed to load Core");
     
@@ -161,7 +171,7 @@ const WIDTH: usize = 640;
 const HEIGHT: usize = 480;
 
 fn main() {
-    let emulator_state = parse_command_line_arguments();
+    unsafe { CURRENT_EMULATOR_STATE = parse_command_line_arguments()};
 
     let mut buffer: Vec<u32> = vec![0; WIDTH * HEIGHT];
     let mut window = Window::new("Rust Game", WIDTH, HEIGHT, WindowOptions::default())
@@ -177,7 +187,7 @@ fn main() {
     let mut fps_timer = Instant::now();
     let mut fps_counter: i32 = 0;
 
-    let core = Core::new(emulator_state.library_name);
+    let core = Core::new(unsafe { &CURRENT_EMULATOR_STATE.library_name });
     let core_api = &core.api;
 
     unsafe {
@@ -187,8 +197,8 @@ fn main() {
         (core_api.retro_set_input_state)(libretro_set_input_state_callback);
         (core_api.retro_set_audio_sample)(libretro_set_audio_sample_callback);
         (core_api.retro_set_audio_sample_batch)(libretro_set_audio_sample_batch_callback);
-        println!("About to load ROM: {}", emulator_state.rom_name);
-        load_rom_file(core_api, emulator_state.rom_name);
+        println!("About to load ROM: {}", &CURRENT_EMULATOR_STATE.rom_name);
+        load_rom_file(core_api, &CURRENT_EMULATOR_STATE.rom_name);
     }
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
@@ -225,7 +235,22 @@ fn main() {
         // Set the pixel to blue
         buffer[y * WIDTH + x] = 0x0000FFFF;
 
-        // Update the window buffer and display the changes
-        window.update_with_buffer(&buffer, WIDTH, HEIGHT).unwrap();
+       unsafe {
+        match &CURRENT_EMULATOR_STATE.frame_buffer {
+            Some(buffer) => {
+                let slice_u32: &[u32] = unsafe {
+                    std::slice::from_raw_parts(buffer.as_ptr() as *const u32, buffer.len())
+                };
+                // temporary hack
+                let mut vec: Vec<u32> = slice_u32.to_vec();
+                vec.resize(WIDTH*HEIGHT*4, 0x0000FFFF);
+                window.update_with_buffer(&vec, WIDTH, HEIGHT).unwrap();
+            }
+            None => {
+                // Handle the case where frame_buffer is None
+                println!("We don't have a buffer to display");
+            }
+        }
+       }
     }
 }
