@@ -1,11 +1,9 @@
 use minifb::{Key, Window, WindowOptions, KeyRepeat};
 use std::{fs, ptr};
-use std::time::Instant;
 use std::ffi::{c_void, CString};
 use libloading::Library;
 use libretro_sys::{CoreAPI, GameInfo, PixelFormat};
 use clap::Parser;
-use rand::prelude::*;
 
 pub const DEVICE_ID_JOYPAD_B: libc::c_uint = 0;
 pub const DEVICE_ID_JOYPAD_Y: libc::c_uint = 1;
@@ -272,19 +270,12 @@ const HEIGHT: usize = 140;
 fn main() {
     unsafe { CURRENT_EMULATOR_STATE = parse_command_line_arguments()};
 
-    let mut buffer: Vec<u32> = vec![0; WIDTH * HEIGHT];
     let mut window = Window::new("Rust Game", WIDTH, HEIGHT, WindowOptions::default())
         .unwrap_or_else(|e| {
             panic!("{}", e);
         });
 
     window.limit_update_rate(Some(std::time::Duration::from_micros(16600))); // ~60fps
-
-    let mut x: usize = 0;
-    let mut y: usize = 0;
-
-    let mut fps_timer = Instant::now();
-    let mut fps_counter: i32 = 0;
 
     let core = Core::new(unsafe { &CURRENT_EMULATOR_STATE.library_name });
     let core_api = &core.api;
