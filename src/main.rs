@@ -1,14 +1,22 @@
-use minifb::{Key, Window, WindowOptions};
-use core::slice;
-use std::{fs, convert};
-use std::time::{Duration, Instant};
+use minifb::{Key, Window, WindowOptions, KeyRepeat};
+use std::{fs, ptr};
+use std::time::Instant;
 use std::ffi::{c_void, CString};
-use std::ptr;
 use libloading::Library;
-use libretro_sys::CoreAPI;
-use libretro_sys::GameInfo;
-use libretro_sys::PixelFormat;
+use libretro_sys::{CoreAPI, GameInfo, PixelFormat};
 use clap::Parser;
+use rand::prelude::*;
+
+pub const DEVICE_ID_JOYPAD_B: libc::c_uint = 0;
+pub const DEVICE_ID_JOYPAD_Y: libc::c_uint = 1;
+pub const DEVICE_ID_JOYPAD_SELECT: libc::c_uint = 2;
+pub const DEVICE_ID_JOYPAD_START: libc::c_uint = 3;
+pub const DEVICE_ID_JOYPAD_UP: libc::c_uint = 4;
+pub const DEVICE_ID_JOYPAD_DOWN: libc::c_uint = 5;
+pub const DEVICE_ID_JOYPAD_LEFT: libc::c_uint = 6;
+pub const DEVICE_ID_JOYPAD_RIGHT: libc::c_uint = 7;
+pub const DEVICE_ID_JOYPAD_A: libc::c_uint = 8;
+pub const DEVICE_ID_JOYPAD_X: libc::c_uint = 9;
 
 unsafe extern "C" fn libretro_set_video_refresh_callback(frame_buffer_data: *const libc::c_void, width: libc::c_uint, height: libc::c_uint, pitch: libc::size_t) {
     if (frame_buffer_data == ptr::null()) {
@@ -34,8 +42,13 @@ unsafe extern "C" fn libretro_set_input_poll_callback() {
 }
 
 unsafe extern "C" fn libretro_set_input_state_callback(port: libc::c_uint, device: libc::c_uint, index: libc::c_uint, id: libc::c_uint) -> i16 {
-    println!("libretro_set_input_state_callback");
-    return 0; // Hard coded 0 for now means nothing is pressed
+    // println!("libretro_set_input_state_callback port: {} device: {} index: {} id: {}", port, device, index, id);
+    let is_pressed = match &CURRENT_EMULATOR_STATE.buttons_pressed {
+        Some(buttons_pressed) => buttons_pressed[id as usize],
+        None => 0
+    };
+
+    return is_pressed;
 }
 
 unsafe extern "C" fn libretro_set_audio_sample_callback(left: i16, right: i16) {
@@ -73,7 +86,9 @@ struct EmulatorState {
     #[arg(skip)]
     screen_width: u32,
     #[arg(skip)]
-    screen_height: u32
+    screen_height: u32,
+    #[arg(skip)]
+    buttons_pressed: Option<Vec<i16>>
 }
 
 static mut CURRENT_EMULATOR_STATE: EmulatorState = EmulatorState {
@@ -84,7 +99,8 @@ static mut CURRENT_EMULATOR_STATE: EmulatorState = EmulatorState {
     bytes_per_pixel: 4,
     screen_pitch: 0,
     screen_width: 0,
-    screen_height: 0
+    screen_height: 0,
+    buttons_pressed: None
 };
 
 fn parse_command_line_arguments() -> EmulatorState {
@@ -284,41 +300,44 @@ fn main() {
         load_rom_file(core_api, &CURRENT_EMULATOR_STATE.rom_name);
     }
 
+    let mut this_frames_pressed_buttons = vec![0; 16];
+
+
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        // Call the libRetro core every frame
-        unsafe {
-            (core_api.retro_run)();
+
+        let mini_fb_keys_pressed = window.get_keys_pressed(KeyRepeat::No);
+        if !mini_fb_keys_pressed.is_empty(){
+            for key in mini_fb_keys_pressed {
+                match key {
+                    Key::Enter => {this_frames_pressed_buttons[libretro_sys::DEVICE_ID_JOYPAD_START as usize] = 1;},
+                    Key::Right => {this_frames_pressed_buttons[libretro_sys::DEVICE_ID_JOYPAD_RIGHT as usize] = 1;},
+                    Key::Left => {this_frames_pressed_buttons[libretro_sys::DEVICE_ID_JOYPAD_LEFT as usize] = 1;},
+                    Key::Up => {this_frames_pressed_buttons[libretro_sys::DEVICE_ID_JOYPAD_UP as usize] = 1;},
+                    Key::Down => {this_frames_pressed_buttons[libretro_sys::DEVICE_ID_JOYPAD_DOWN as usize] = 1;},
+                    Key::A => {this_frames_pressed_buttons[libretro_sys::DEVICE_ID_JOYPAD_A as usize] = 1;},
+                    Key::S => {this_frames_pressed_buttons[libretro_sys::DEVICE_ID_JOYPAD_B as usize] = 1;},
+                    _ => {println!("Unhandled Key Pressed: {:?}", key);}
+                }
+            }
         }
 
-        // Clear the previous pixel to black
-        buffer[y * WIDTH + x] = 0x00000000;
-        fps_counter += 1;
-        let elapsed = fps_timer.elapsed();
-        if elapsed >= Duration::from_secs(1) {
-            let fps = fps_counter as f64 / elapsed.as_secs_f64();
-            window.set_title(&format!("Rust Game (FPS: {:.2})", fps));
-            fps_counter = 0;
-            fps_timer = Instant::now();
+        let mini_fb_keys_released = window.get_keys_released();
+        for key in &mini_fb_keys_released {
+            match key {
+                Key::Enter => {this_frames_pressed_buttons[libretro_sys::DEVICE_ID_JOYPAD_START as usize] = 0;},
+                Key::Right => {this_frames_pressed_buttons[libretro_sys::DEVICE_ID_JOYPAD_RIGHT as usize] = 0;},
+                Key::Left => {this_frames_pressed_buttons[libretro_sys::DEVICE_ID_JOYPAD_LEFT as usize] = 0;},
+                Key::Up => {this_frames_pressed_buttons[libretro_sys::DEVICE_ID_JOYPAD_UP as usize] = 0;},
+                Key::Down => {this_frames_pressed_buttons[libretro_sys::DEVICE_ID_JOYPAD_DOWN as usize] = 0;},
+                Key::A => {this_frames_pressed_buttons[libretro_sys::DEVICE_ID_JOYPAD_A as usize] = 0;},
+                Key::S => {this_frames_pressed_buttons[libretro_sys::DEVICE_ID_JOYPAD_B as usize] = 0;},
+                _ => println!("Unhandled Key Released: {:?}", key),
+            }
         }
-
-        // Move the pixel when the arrow keys are pressed
-        if window.is_key_down(Key::Left) && x > 0 {
-            x -= 1;
-        }
-        if window.is_key_down(Key::Right) && x < WIDTH - 1 {
-            x += 1;
-        }
-        if window.is_key_down(Key::Up) && y > 0 {
-            y -= 1;
-        }
-        if window.is_key_down(Key::Down) && y < HEIGHT - 1 {
-            y += 1;
-        }
-
-        // Set the pixel to blue
-        buffer[y * WIDTH + x] = 0x0000FFFF;
 
        unsafe {
+        (core_api.retro_run)();
+
         match &CURRENT_EMULATOR_STATE.frame_buffer {
             Some(buffer) => {
                 let width = (CURRENT_EMULATOR_STATE.screen_pitch / CURRENT_EMULATOR_STATE.bytes_per_pixel as u32) as usize;
@@ -337,6 +356,7 @@ fn main() {
                 println!("We don't have a buffer to display");
             }
         }
+        CURRENT_EMULATOR_STATE.buttons_pressed = Some(this_frames_pressed_buttons.clone());
        }
     }
 }
