@@ -1,4 +1,5 @@
 use minifb::{Key, Window, WindowOptions};
+use core::slice;
 use std::{fs, convert};
 use std::time::{Duration, Instant};
 use std::ffi::{c_void, CString};
@@ -23,6 +24,9 @@ unsafe extern "C" fn libretro_set_video_refresh_callback(frame_buffer_data: *con
 
     // Wrap the Vec<u8> in an Some Option and assign it to the frame_buffer field
     CURRENT_EMULATOR_STATE.frame_buffer = Some(buffer_vec);
+    CURRENT_EMULATOR_STATE.screen_height = height;
+    CURRENT_EMULATOR_STATE.screen_width = width;
+    CURRENT_EMULATOR_STATE.screen_pitch = pitch as u32;
 }
 
 unsafe extern "C" fn libretro_set_input_poll_callback() {
@@ -63,7 +67,13 @@ struct EmulatorState {
     #[arg(skip)]
     pixel_format: EmulatorPixelFormat,
     #[arg(skip)]
-    bytes_per_pixel: u8
+    bytes_per_pixel: u8,
+    #[arg(skip)]
+    screen_pitch: u32,
+    #[arg(skip)]
+    screen_width: u32,
+    #[arg(skip)]
+    screen_height: u32
 }
 
 static mut CURRENT_EMULATOR_STATE: EmulatorState = EmulatorState {
@@ -71,7 +81,10 @@ static mut CURRENT_EMULATOR_STATE: EmulatorState = EmulatorState {
     library_name: String::new(),
     frame_buffer: None,
     pixel_format: EmulatorPixelFormat(PixelFormat::ARGB8888),
-    bytes_per_pixel: 4
+    bytes_per_pixel: 4,
+    screen_pitch: 0,
+    screen_width: 0,
+    screen_height: 0
 };
 
 fn parse_command_line_arguments() -> EmulatorState {
@@ -237,8 +250,8 @@ impl Drop for Core {
     }
 }
 
-const WIDTH: usize = 640;
-const HEIGHT: usize = 480;
+const WIDTH: usize = 256;
+const HEIGHT: usize = 140;
 
 fn main() {
     unsafe { CURRENT_EMULATOR_STATE = parse_command_line_arguments()};
@@ -308,16 +321,19 @@ fn main() {
        unsafe {
         match &CURRENT_EMULATOR_STATE.frame_buffer {
             Some(buffer) => {
-                let slice_u32: &[u32] = unsafe {
-                    std::slice::from_raw_parts(buffer.as_ptr() as *const u32, buffer.len())
-                };
-                // temporary hack
-                let mut vec: Vec<u32> = slice_u32.to_vec();
-                vec.resize(WIDTH*HEIGHT*4, 0x0000FFFF);
-                window.update_with_buffer(&vec, WIDTH, HEIGHT).unwrap();
+                let width = (CURRENT_EMULATOR_STATE.screen_pitch / CURRENT_EMULATOR_STATE.bytes_per_pixel as u32) as usize;
+                let height = CURRENT_EMULATOR_STATE.screen_height as usize;
+                let slice_of_pixel_buffer: &[u32] = std::slice::from_raw_parts(buffer.as_ptr() as *const u32, buffer.len()); // convert to &[u32] slice reference
+                if slice_of_pixel_buffer.len() < width*height*4 {
+                     // The frame buffer isn't big enough so lets add additional pixels just so we can display it
+                     let mut vec: Vec<u32> = slice_of_pixel_buffer.to_vec();
+                     vec.resize((width*height*4) as usize, 0x0000FFFF); // Add any missing pixels with colour blue
+                     window.update_with_buffer(&vec, width, height).unwrap();
+                } else{
+                    window.update_with_buffer(&slice_of_pixel_buffer, width, height);
+                }
             }
             None => {
-                // Handle the case where frame_buffer is None
                 println!("We don't have a buffer to display");
             }
         }
