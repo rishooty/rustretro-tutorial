@@ -1,6 +1,10 @@
 use minifb::{Key, Window, WindowOptions, KeyRepeat};
-use std::{fs, ptr};
+use std::fs::File;
+use std::io::{BufReader, BufRead};
+use std::{fs, ptr, env};
 use std::ffi::{c_void, CString};
+use std::path::{PathBuf, Path};
+use std::collections::HashMap;
 use libloading::Library;
 use libretro_sys::{CoreAPI, GameInfo, PixelFormat};
 use clap::Parser;
@@ -15,6 +19,64 @@ pub const DEVICE_ID_JOYPAD_LEFT: libc::c_uint = 6;
 pub const DEVICE_ID_JOYPAD_RIGHT: libc::c_uint = 7;
 pub const DEVICE_ID_JOYPAD_A: libc::c_uint = 8;
 pub const DEVICE_ID_JOYPAD_X: libc::c_uint = 9;
+
+fn get_retroarch_config_path() -> PathBuf {
+    return match std::env::consts::OS {
+        "windows" => PathBuf::from(env::var("APPDATA").ok().unwrap()).join("retroarch"),
+        "macos" => PathBuf::from(env::var("HOME").ok().unwrap()).join("Library/Application Support/RetroArch"),
+        _ => PathBuf::from(env::var("XDG_CONFIG_HOME").ok().unwrap()).join("retroarch"),
+    };
+}
+
+fn parse_retroarch_config(config_file: &Path) -> Result<HashMap<String, String>, String> {
+    let file = File::open(config_file).map_err(|e| format!("Failed to open file: {}", e))?;
+    let reader = BufReader::new(file);
+    let mut config_map = HashMap::new();
+    for line in reader.lines() {
+        let line = line.map_err(|e| format!("Failed to read line: {}", e))?;
+        if let Some((key, value)) = line.split_once("=") {
+            config_map.insert(key.trim().to_string(), value.trim().replace("\"", "").to_string());
+        }
+    }
+    Ok(config_map)
+}
+
+fn setup_config() -> Result<HashMap<String, String>, String> {
+    let retro_arch_config_path = get_retroarch_config_path();
+    let our_config = parse_retroarch_config(Path::new("./rustroarch.cfg"));
+    let retro_arch_config = parse_retroarch_config(&retro_arch_config_path.join("config/retroarch.cfg"));
+    let mut merged_config: HashMap<String, String> = HashMap::from([
+        ("input_player1_a", "a"),
+        ("input_player1_b", "s"),
+        ("input_player1_x", "z"),
+        ("input_player1_y", "x"),
+        ("input_player1_l", "q"),
+        ("input_player1_r", "w"),
+        ("input_player1_down", "down"),
+        ("input_player1_up", "up"),
+        ("input_player1_left", "left"),
+        ("input_player1_right", "right"),
+        ("input_player1_select", "space"),
+        ("input_player1_start", "enter"),
+        ("input_reset", "h"),
+        ("input_save_state", "f2"),
+        ("input_load_state", "f4"),
+        ("input_screenshot", "f8"),
+        ("savestate_directory", "./states"),
+        ]).iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    match retro_arch_config {
+        Ok(config) => merged_config.extend(config),
+        _ => println!("We don't have RetroArch config")
+    }
+    match our_config {
+        Ok(config) => merged_config.extend(config),
+       _ => println!("We don't have RustroArch config",)
+    }
+    // println!("retro_arch_config_path: {} merged_config: {:?}", retro_arch_config_path.join("config/retroarch.cfg").display(), merged_config);
+    Ok(merged_config)
+}
 
 unsafe extern "C" fn libretro_set_video_refresh_callback(frame_buffer_data: *const libc::c_void, width: libc::c_uint, height: libc::c_uint, pitch: libc::size_t) {
     if (frame_buffer_data == ptr::null()) {
@@ -293,36 +355,46 @@ fn main() {
 
     let mut this_frames_pressed_buttons = vec![0; 16];
 
+    let config = setup_config().unwrap();
+
+    let key_device_map = HashMap::from([
+            (&config["input_player1_a"], libretro_sys::DEVICE_ID_JOYPAD_A as usize),
+            (&config["input_player1_b"], libretro_sys::DEVICE_ID_JOYPAD_B as usize),
+            (&config["input_player1_x"], libretro_sys::DEVICE_ID_JOYPAD_X as usize),
+            (&config["input_player1_y"], libretro_sys::DEVICE_ID_JOYPAD_Y as usize),
+            (&config["input_player1_l"], libretro_sys::DEVICE_ID_JOYPAD_L as usize),
+            (&config["input_player1_r"], libretro_sys::DEVICE_ID_JOYPAD_R as usize),
+            (&config["input_player1_down"], libretro_sys::DEVICE_ID_JOYPAD_DOWN as usize),
+            (&config["input_player1_up"], libretro_sys::DEVICE_ID_JOYPAD_UP as usize),
+            (&config["input_player1_right"], libretro_sys::DEVICE_ID_JOYPAD_RIGHT as usize),
+            (&config["input_player1_left"], libretro_sys::DEVICE_ID_JOYPAD_LEFT as usize),
+            (&config["input_player1_start"], libretro_sys::DEVICE_ID_JOYPAD_START as usize),
+            (&config["input_player1_select"], libretro_sys::DEVICE_ID_JOYPAD_SELECT as usize),
+    ]);
+
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
-
         let mini_fb_keys_pressed = window.get_keys_pressed(KeyRepeat::No);
         if !mini_fb_keys_pressed.is_empty(){
             for key in mini_fb_keys_pressed {
-                match key {
-                    Key::Enter => {this_frames_pressed_buttons[libretro_sys::DEVICE_ID_JOYPAD_START as usize] = 1;},
-                    Key::Right => {this_frames_pressed_buttons[libretro_sys::DEVICE_ID_JOYPAD_RIGHT as usize] = 1;},
-                    Key::Left => {this_frames_pressed_buttons[libretro_sys::DEVICE_ID_JOYPAD_LEFT as usize] = 1;},
-                    Key::Up => {this_frames_pressed_buttons[libretro_sys::DEVICE_ID_JOYPAD_UP as usize] = 1;},
-                    Key::Down => {this_frames_pressed_buttons[libretro_sys::DEVICE_ID_JOYPAD_DOWN as usize] = 1;},
-                    Key::A => {this_frames_pressed_buttons[libretro_sys::DEVICE_ID_JOYPAD_A as usize] = 1;},
-                    Key::S => {this_frames_pressed_buttons[libretro_sys::DEVICE_ID_JOYPAD_B as usize] = 1;},
-                    _ => {println!("Unhandled Key Pressed: {:?}", key);}
+                let key_as_string = format!("{:?}", key).to_ascii_lowercase();
+
+                if let Some(device_id) = key_device_map.get(&key_as_string) {
+                    this_frames_pressed_buttons[*device_id] = 1;
+                } else {
+                    println!("Unhandled Key Pressed: {} input_player1_a: {}", key_as_string, config["input_player1_a"]);
                 }
             }
         }
 
         let mini_fb_keys_released = window.get_keys_released();
         for key in &mini_fb_keys_released {
-            match key {
-                Key::Enter => {this_frames_pressed_buttons[libretro_sys::DEVICE_ID_JOYPAD_START as usize] = 0;},
-                Key::Right => {this_frames_pressed_buttons[libretro_sys::DEVICE_ID_JOYPAD_RIGHT as usize] = 0;},
-                Key::Left => {this_frames_pressed_buttons[libretro_sys::DEVICE_ID_JOYPAD_LEFT as usize] = 0;},
-                Key::Up => {this_frames_pressed_buttons[libretro_sys::DEVICE_ID_JOYPAD_UP as usize] = 0;},
-                Key::Down => {this_frames_pressed_buttons[libretro_sys::DEVICE_ID_JOYPAD_DOWN as usize] = 0;},
-                Key::A => {this_frames_pressed_buttons[libretro_sys::DEVICE_ID_JOYPAD_A as usize] = 0;},
-                Key::S => {this_frames_pressed_buttons[libretro_sys::DEVICE_ID_JOYPAD_B as usize] = 0;},
-                _ => println!("Unhandled Key Released: {:?}", key),
+            let key_as_string = format!("{:?}", key).to_ascii_lowercase();
+
+            if let Some(device_id) = key_device_map.get(&key_as_string) {
+                this_frames_pressed_buttons[*device_id] = 0;
+            } else {
+                println!("Unhandled Key Pressed: {} input_player1_a: {}", key_as_string, config["input_player1_a"]);
             }
         }
 
@@ -340,7 +412,7 @@ fn main() {
                      vec.resize((width*height*4) as usize, 0x0000FFFF); // Add any missing pixels with colour blue
                      window.update_with_buffer(&vec, width, height).unwrap();
                 } else{
-                    window.update_with_buffer(&slice_of_pixel_buffer, width, height);
+                    let _ = window.update_with_buffer(&slice_of_pixel_buffer, width, height);
                 }
             }
             None => {
