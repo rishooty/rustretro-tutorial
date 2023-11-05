@@ -1,7 +1,7 @@
 use minifb::{Key, Window, WindowOptions, KeyRepeat};
 use std::fs::File;
 use std::io::{BufReader, BufRead};
-use std::{fs, ptr, env};
+use std::{fs, ptr, env, process};
 use std::ffi::{c_void, CString};
 use std::path::{PathBuf, Path};
 use std::collections::HashMap;
@@ -381,9 +381,16 @@ fn main() {
 
                 if let Some(device_id) = key_device_map.get(&key_as_string) {
                     this_frames_pressed_buttons[*device_id] = 1;
-                } else {
-                    println!("Unhandled Key Pressed: {} input_player1_a: {}", key_as_string, config["input_player1_a"]);
                 }
+                if &key_as_string == &config["input_save_state"] {
+                    println!("Save state called"); // f2
+                    continue;
+                } 
+                if &key_as_string == &config["input_load_state"] {
+                    println!("Load state called"); // f4
+                    continue;
+                } 
+                println!("Unhandled Key Pressed: {} ", key_as_string);
             }
         }
 
