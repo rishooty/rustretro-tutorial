@@ -1,7 +1,11 @@
 use minifb::{Key, Window, WindowOptions, KeyRepeat};
 use std::fs::File;
 use std::io::{BufReader, BufRead, Read};
-use std::{fs, ptr, env, process};
+use std::{fs, ptr, env};
+use std::time::Duration;
+use rodio::{Decoder, OutputStream, Sink};
+use rodio::source::{SineWave, Source};
+use rodio::buffer::SamplesBuffer;
 use std::ffi::{c_void, CString};
 use std::path::{PathBuf, Path};
 use std::collections::HashMap;
@@ -20,6 +24,23 @@ pub const DEVICE_ID_JOYPAD_LEFT: libc::c_uint = 6;
 pub const DEVICE_ID_JOYPAD_RIGHT: libc::c_uint = 7;
 pub const DEVICE_ID_JOYPAD_A: libc::c_uint = 8;
 pub const DEVICE_ID_JOYPAD_X: libc::c_uint = 9;
+
+fn play_audio(sink: &Sink) {
+    unsafe{
+        match &CURRENT_EMULATOR_STATE.audio_data {
+            Some(data) => {
+                if sink.empty() {
+                    let audio_slice = std::slice::from_raw_parts(data.as_ptr() as *const i16, data.len());
+                    let source = SamplesBuffer::new(2, 32768, audio_slice);
+                    sink.append(source);
+                    sink.play();
+                    sink.sleep_until_end();
+                }
+            },
+            None => {},
+        };
+    }
+  }
 
 fn get_save_state_path(save_directory: &String, game_file_name: &str, save_state_index: &u8) -> Option<PathBuf> {
     // Expand the tilde to the home directory
@@ -176,9 +197,14 @@ unsafe extern "C" fn libretro_set_audio_sample_callback(left: i16, right: i16) {
     println!("libretro_set_audio_sample_callback");
 }
 
-unsafe extern "C" fn libretro_set_audio_sample_batch_callback(data: *const i16, frames: libc::size_t) -> libc::size_t {
-    println!("libretro_set_audio_sample_batch_callback");
-    return 1;
+const AUDIO_CHANNELS: usize = 2; // left and right
+unsafe extern "C" fn libretro_set_audio_sample_batch_callback(
+    audio_data: *const i16,
+    frames: libc::size_t,
+) -> libc::size_t {
+    let audio_slice = std::slice::from_raw_parts(audio_data, frames * AUDIO_CHANNELS);
+    CURRENT_EMULATOR_STATE.audio_data = Some(audio_slice.to_vec());
+    return frames;
 }
 
 pub struct EmulatorPixelFormat(PixelFormat);
@@ -211,7 +237,9 @@ struct EmulatorState {
     #[arg(skip)]
     buttons_pressed: Option<Vec<i16>>,
     #[arg(skip)]
-    current_save_slot: u8
+    current_save_slot: u8,
+    #[arg(skip)]
+    audio_data: Option<Vec<i16>>,
 }
 
 static mut CURRENT_EMULATOR_STATE: EmulatorState = EmulatorState {
@@ -224,7 +252,8 @@ static mut CURRENT_EMULATOR_STATE: EmulatorState = EmulatorState {
     screen_width: 0,
     screen_height: 0,
     buttons_pressed: None,
-    current_save_slot: 0
+    current_save_slot: 0,
+    audio_data: None
 };
 
 fn parse_command_line_arguments() -> EmulatorState {
@@ -405,6 +434,8 @@ fn main() {
 
     let core = Core::new(unsafe { &CURRENT_EMULATOR_STATE.library_name });
     let core_api = &core.api;
+    let (_stream, stream_handle) = OutputStream::try_default().unwrap();
+    let sink = Sink::try_new(&stream_handle).unwrap();
 
     unsafe {
         (core_api.retro_init)();
@@ -512,5 +543,7 @@ fn main() {
         }
         CURRENT_EMULATOR_STATE.buttons_pressed = Some(this_frames_pressed_buttons.clone());
        }
+
+       play_audio(&sink);
     }
 }

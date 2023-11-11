@@ -13,3 +13,4 @@ libretro-sys = "0.1.1"
 clap = { version = "4.4.2", features = ["derive"] }
 rand = "0.8.5"
 shellexpand = "2.1"
+rodio = "0.17.3"
