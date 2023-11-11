@@ -1,6 +1,6 @@
 use minifb::{Key, Window, WindowOptions, KeyRepeat};
 use std::fs::File;
-use std::io::{BufReader, BufRead};
+use std::io::{BufReader, BufRead, Read};
 use std::{fs, ptr, env, process};
 use std::ffi::{c_void, CString};
 use std::path::{PathBuf, Path};
@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use libloading::Library;
 use libretro_sys::{CoreAPI, GameInfo, PixelFormat};
 use clap::Parser;
+use shellexpand;
 
 pub const DEVICE_ID_JOYPAD_B: libc::c_uint = 0;
 pub const DEVICE_ID_JOYPAD_Y: libc::c_uint = 1;
@@ -19,6 +20,66 @@ pub const DEVICE_ID_JOYPAD_LEFT: libc::c_uint = 6;
 pub const DEVICE_ID_JOYPAD_RIGHT: libc::c_uint = 7;
 pub const DEVICE_ID_JOYPAD_A: libc::c_uint = 8;
 pub const DEVICE_ID_JOYPAD_X: libc::c_uint = 9;
+
+fn get_save_state_path(save_directory: &String, game_file_name: &str, save_state_index: u32) -> Option<PathBuf> {
+    // Expand the tilde to the home directory
+    let expanded_save_directory = shellexpand::tilde(save_directory);
+
+    // Create a subdirectory named "saves" in the specified directory
+    let saves_dir = PathBuf::from(expanded_save_directory.into_owned());
+    if !saves_dir.exists() {
+        match std::fs::create_dir_all(&saves_dir) {
+            Ok(_) => {}
+            Err(err) => panic!("Failed to create save directory: {:?} Error: {}", &saves_dir, err),
+        }
+    }
+
+    // Generate the save state filename
+    let game_name = Path::new(game_file_name)
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .replace(" ", "_");
+    let save_state_file_name = format!("{}_{}.state", game_name, save_state_index);
+
+    // Combine the saves directory and the save state filename to create the full path
+    let save_state_path = saves_dir.join(save_state_file_name);
+
+    Some(save_state_path)
+}
+
+unsafe fn save_state(core_api: &CoreAPI, save_directory: &String) {
+    let save_state_buffer_size =  (core_api.retro_serialize_size)();
+    let mut state_buffer: Vec<u8> = vec![0; save_state_buffer_size];
+    // Call retro_serialize to create the save state
+    (core_api.retro_serialize)(state_buffer.as_mut_ptr() as *mut c_void, save_state_buffer_size);
+    let file_path = get_save_state_path(save_directory, &CURRENT_EMULATOR_STATE.rom_name, 0).unwrap(); // hard coded save_slot to 0 for now
+    std::fs::write(&file_path, &state_buffer).unwrap();
+    println!("Save state saved to: {} with size: {}", file_path.display(), save_state_buffer_size);
+}
+
+unsafe fn load_state(core_api: &CoreAPI, save_directory: &String) {
+    let file_path = get_save_state_path(save_directory, &CURRENT_EMULATOR_STATE.rom_name, 0).unwrap(); // Hard coded the save_slot to 0 for now
+    let mut state_buffer = Vec::new();
+    match File::open(&file_path) {
+        Ok(mut file) => {
+            // Read the save state file into a buffer
+            match file.read_to_end(&mut state_buffer) {
+                Ok(_) => {
+                    // Call retro_unserialize to apply the save state
+                    let result = (core_api.retro_unserialize)(state_buffer.as_mut_ptr() as *mut c_void, state_buffer.len() as usize);
+                    if result {
+                        println!("Save state loaded from: {}", &file_path.display());
+                    } else {
+                        println!("Failed to load save state: error code {}", result);
+                    }
+                }
+                Err(err) => println!("Error reading save state file: {}", err),
+            }
+        }
+        Err(_) => println!("Save state file not found"),
+    }
+}
 
 fn get_retroarch_config_path() -> PathBuf {
     return match std::env::consts::OS {
@@ -383,11 +444,11 @@ fn main() {
                     this_frames_pressed_buttons[*device_id] = 1;
                 }
                 if &key_as_string == &config["input_save_state"] {
-                    println!("Save state called"); // f2
+                    unsafe { save_state(&core_api,  &config["savestate_directory"]); } // f2
                     continue;
                 } 
                 if &key_as_string == &config["input_load_state"] {
-                    println!("Load state called"); // f4
+                    unsafe { load_state(&core_api,  &config["savestate_directory"]); } // f4
                     continue;
                 } 
                 println!("Unhandled Key Pressed: {} ", key_as_string);
