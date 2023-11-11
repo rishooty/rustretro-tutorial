@@ -1,7 +1,7 @@
 use minifb::{Key, Window, WindowOptions, KeyRepeat};
 use std::fs::File;
 use std::io::{BufReader, BufRead, Read};
-use std::{fs, ptr, env};
+use std::{fs, ptr, env, thread};
 use std::time::Duration;
 use rodio::{Decoder, OutputStream, Sink};
 use rodio::source::{SineWave, Source};
@@ -13,6 +13,7 @@ use libloading::Library;
 use libretro_sys::{CoreAPI, GameInfo, PixelFormat};
 use clap::Parser;
 use shellexpand;
+use std::sync::mpsc::{Sender,channel};
 
 pub const DEVICE_ID_JOYPAD_B: libc::c_uint = 0;
 pub const DEVICE_ID_JOYPAD_Y: libc::c_uint = 1;
@@ -25,22 +26,15 @@ pub const DEVICE_ID_JOYPAD_RIGHT: libc::c_uint = 7;
 pub const DEVICE_ID_JOYPAD_A: libc::c_uint = 8;
 pub const DEVICE_ID_JOYPAD_X: libc::c_uint = 9;
 
-fn play_audio(sink: &Sink) {
-    unsafe{
-        match &CURRENT_EMULATOR_STATE.audio_data {
-            Some(data) => {
-                if sink.empty() {
-                    let audio_slice = std::slice::from_raw_parts(data.as_ptr() as *const i16, data.len());
-                    let source = SamplesBuffer::new(2, 32768, audio_slice);
-                    sink.append(source);
-                    sink.play();
-                    sink.sleep_until_end();
-                }
-            },
-            None => {},
-        };
+unsafe fn play_audio( sink: &Sink, audio_samples: &Vec<i16>) {
+    if sink.empty() {
+        let audio_slice = std::slice::from_raw_parts(audio_samples.as_ptr() as *const i16, audio_samples.len());
+        let source = SamplesBuffer::new(2, 32768, audio_slice);
+        sink.append(source);
+        sink.play();
+        sink.sleep_until_end();
     }
-  }
+}
 
 fn get_save_state_path(save_directory: &String, game_file_name: &str, save_state_index: &u8) -> Option<PathBuf> {
     // Expand the tilde to the home directory
@@ -205,6 +199,16 @@ unsafe extern "C" fn libretro_set_audio_sample_batch_callback(
     let audio_slice = std::slice::from_raw_parts(audio_data, frames * AUDIO_CHANNELS);
     CURRENT_EMULATOR_STATE.audio_data = Some(audio_slice.to_vec());
     return frames;
+}
+
+unsafe fn send_audio_to_thread(sender: &Sender<&Vec<i16>>) {
+    // Send the audio samples to the audio thread using the channel
+    match &CURRENT_EMULATOR_STATE.audio_data {
+        Some(data) => {
+            sender.send(data).unwrap();
+        },
+        None => {},
+    }; 
 }
 
 pub struct EmulatorPixelFormat(PixelFormat);
@@ -434,8 +438,21 @@ fn main() {
 
     let core = Core::new(unsafe { &CURRENT_EMULATOR_STATE.library_name });
     let core_api = &core.api;
+    // Audio Setup
     let (_stream, stream_handle) = OutputStream::try_default().unwrap();
-    let sink = Sink::try_new(&stream_handle).unwrap();
+
+    // Create a channel for passing audio samples from the main thread to the audio thread
+    let (sender, receiver) = channel();
+
+    // Spawn a new thread to play back audio
+    let audio_thread = thread::spawn(move || {
+        let sink = Sink::try_new(&stream_handle).unwrap();
+        loop {
+            // Receive the next set of audio samples from the channel
+            let audio_samples = receiver.recv().unwrap();
+            unsafe { play_audio(&sink, audio_samples); } // pass the audio samples to the play_audio function
+        }
+    });
 
     unsafe {
         (core_api.retro_init)();
@@ -523,6 +540,8 @@ fn main() {
        unsafe {
         (core_api.retro_run)();
 
+        send_audio_to_thread(&sender);
+
         match &CURRENT_EMULATOR_STATE.frame_buffer {
             Some(buffer) => {
                 let width = (CURRENT_EMULATOR_STATE.screen_pitch / CURRENT_EMULATOR_STATE.bytes_per_pixel as u32) as usize;
@@ -543,7 +562,5 @@ fn main() {
         }
         CURRENT_EMULATOR_STATE.buttons_pressed = Some(this_frames_pressed_buttons.clone());
        }
-
-       play_audio(&sink);
     }
 }
