@@ -21,7 +21,7 @@ pub const DEVICE_ID_JOYPAD_RIGHT: libc::c_uint = 7;
 pub const DEVICE_ID_JOYPAD_A: libc::c_uint = 8;
 pub const DEVICE_ID_JOYPAD_X: libc::c_uint = 9;
 
-fn get_save_state_path(save_directory: &String, game_file_name: &str, save_state_index: u32) -> Option<PathBuf> {
+fn get_save_state_path(save_directory: &String, game_file_name: &str, save_state_index: &u8) -> Option<PathBuf> {
     // Expand the tilde to the home directory
     let expanded_save_directory = shellexpand::tilde(save_directory);
 
@@ -53,13 +53,13 @@ unsafe fn save_state(core_api: &CoreAPI, save_directory: &String) {
     let mut state_buffer: Vec<u8> = vec![0; save_state_buffer_size];
     // Call retro_serialize to create the save state
     (core_api.retro_serialize)(state_buffer.as_mut_ptr() as *mut c_void, save_state_buffer_size);
-    let file_path = get_save_state_path(save_directory, &CURRENT_EMULATOR_STATE.rom_name, 0).unwrap(); // hard coded save_slot to 0 for now
+    let file_path = get_save_state_path(save_directory, &CURRENT_EMULATOR_STATE.rom_name, &CURRENT_EMULATOR_STATE.current_save_slot).unwrap(); // hard coded save_slot to 0 for now
     std::fs::write(&file_path, &state_buffer).unwrap();
     println!("Save state saved to: {} with size: {}", file_path.display(), save_state_buffer_size);
 }
 
 unsafe fn load_state(core_api: &CoreAPI, save_directory: &String) {
-    let file_path = get_save_state_path(save_directory, &CURRENT_EMULATOR_STATE.rom_name, 0).unwrap(); // Hard coded the save_slot to 0 for now
+    let file_path = get_save_state_path(save_directory, &CURRENT_EMULATOR_STATE.rom_name, &CURRENT_EMULATOR_STATE.current_save_slot).unwrap(); // Hard coded the save_slot to 0 for now
     let mut state_buffer = Vec::new();
     match File::open(&file_path) {
         Ok(mut file) => {
@@ -209,7 +209,9 @@ struct EmulatorState {
     #[arg(skip)]
     screen_height: u32,
     #[arg(skip)]
-    buttons_pressed: Option<Vec<i16>>
+    buttons_pressed: Option<Vec<i16>>,
+    #[arg(skip)]
+    current_save_slot: u8
 }
 
 static mut CURRENT_EMULATOR_STATE: EmulatorState = EmulatorState {
@@ -221,7 +223,8 @@ static mut CURRENT_EMULATOR_STATE: EmulatorState = EmulatorState {
     screen_pitch: 0,
     screen_width: 0,
     screen_height: 0,
-    buttons_pressed: None
+    buttons_pressed: None,
+    current_save_slot: 0
 };
 
 fn parse_command_line_arguments() -> EmulatorState {
@@ -450,7 +453,27 @@ fn main() {
                 if &key_as_string == &config["input_load_state"] {
                     unsafe { load_state(&core_api,  &config["savestate_directory"]); } // f4
                     continue;
-                } 
+                }
+                if &key_as_string == &config["input_state_slot_increase"] {
+                    unsafe{
+                        if CURRENT_EMULATOR_STATE.current_save_slot != 255 {
+                            CURRENT_EMULATOR_STATE.current_save_slot += 1;
+                            println!("Current save slot increased to: {}", CURRENT_EMULATOR_STATE.current_save_slot);
+                        }
+                    }
+                    continue;
+                }
+                
+                if &key_as_string == &config["input_state_slot_decrease"] {
+                    unsafe{
+                        if CURRENT_EMULATOR_STATE.current_save_slot != 0 {
+                            CURRENT_EMULATOR_STATE.current_save_slot -= 1;
+                            println!("Current save slot decreased to: {}", CURRENT_EMULATOR_STATE.current_save_slot);
+                        }
+                    }
+                    continue;
+                }
+                
                 println!("Unhandled Key Pressed: {} ", key_as_string);
             }
         }
