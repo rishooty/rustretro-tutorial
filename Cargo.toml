@@ -14,3 +14,4 @@ clap = { version = "4.4.2", features = ["derive"] }
 rand = "0.8.5"
 shellexpand = "2.1"
 rodio = "0.17.3"
+gilrs = "0.10.3"

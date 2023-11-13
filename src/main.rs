@@ -12,6 +12,7 @@ use libretro_sys::{CoreAPI, GameInfo, PixelFormat, SystemAvInfo, GameGeometry, S
 use clap::Parser;
 use shellexpand;
 use std::sync::mpsc::{Sender,channel};
+use gilrs::{Gilrs, Button, Event, Gamepad, GamepadId};
 
 pub const DEVICE_ID_JOYPAD_B: libc::c_uint = 0;
 pub const DEVICE_ID_JOYPAD_Y: libc::c_uint = 1;
@@ -23,6 +24,67 @@ pub const DEVICE_ID_JOYPAD_LEFT: libc::c_uint = 6;
 pub const DEVICE_ID_JOYPAD_RIGHT: libc::c_uint = 7;
 pub const DEVICE_ID_JOYPAD_A: libc::c_uint = 8;
 pub const DEVICE_ID_JOYPAD_X: libc::c_uint = 9;
+
+fn setup_joypad_device_map() -> HashMap<Button, usize> {
+    return HashMap::from([
+        (
+            Button::South,
+            libretro_sys::DEVICE_ID_JOYPAD_A as usize,
+        ),
+        (
+            Button::East,
+            libretro_sys::DEVICE_ID_JOYPAD_B as usize,
+        ),
+        (
+            Button::West,
+            libretro_sys::DEVICE_ID_JOYPAD_X as usize,
+        ),
+        (
+            Button::North,
+            libretro_sys::DEVICE_ID_JOYPAD_Y as usize,
+        ),
+        (
+            Button::LeftTrigger,
+            libretro_sys::DEVICE_ID_JOYPAD_L as usize,
+        ),
+        (
+            Button::LeftTrigger2,
+            libretro_sys::DEVICE_ID_JOYPAD_L2 as usize,
+        ),
+        (
+            Button::RightTrigger,
+            libretro_sys::DEVICE_ID_JOYPAD_R as usize,
+        ),
+        (
+            Button::RightTrigger2,
+            libretro_sys::DEVICE_ID_JOYPAD_R2 as usize,
+        ),
+        (
+            Button::DPadDown,        
+            libretro_sys::DEVICE_ID_JOYPAD_DOWN as usize,
+        ),
+        (
+            Button::DPadUp,
+            libretro_sys::DEVICE_ID_JOYPAD_UP as usize,
+        ),
+        (
+            Button::DPadRight,
+            libretro_sys::DEVICE_ID_JOYPAD_RIGHT as usize,
+        ),
+        (
+            Button::DPadLeft,
+            libretro_sys::DEVICE_ID_JOYPAD_LEFT as usize,
+        ),
+        (
+            Button::Start,
+            libretro_sys::DEVICE_ID_JOYPAD_START as usize,
+        ),
+        (
+            Button::Select,
+            libretro_sys::DEVICE_ID_JOYPAD_SELECT as usize,
+        ),
+    ]);
+}
 
 unsafe fn play_audio( sink: &Sink, audio_samples: &Vec<i16>, sample_rate: u32) {
     if sink.empty() {
@@ -507,8 +569,31 @@ fn main() {
             (&config["input_player1_select"], libretro_sys::DEVICE_ID_JOYPAD_SELECT as usize),
     ]);
 
+    let joypad_device_map = setup_joypad_device_map();
+
+    println!("Gamepad Setup");
+    let mut gilrs = Gilrs::new().unwrap();
+    let mut active_gamepad:Option<GamepadId>  = None;
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
+        // Gamepad input Handling
+        // Examine new events to check which gamepad is currently being used
+        while let Some(Event { id, event, time }) = gilrs.next_event() {
+            // println!("{:?} New event from {}: {:?}", time, id, event);
+            active_gamepad = Some(id);
+        }
+
+        // Now Lets check what buttons are pressed and map them to the libRetro buttons
+        if let Some(gamepad) = active_gamepad.map(|id| gilrs.gamepad(id)) {
+            for button in [Button::South, Button::North, Button::East, Button::West, Button::Start, Button::Select, Button::DPadDown, Button::DPadUp, Button::DPadLeft, Button::DPadRight, Button::LeftTrigger, Button::LeftTrigger2, Button::RightTrigger, Button::RightTrigger2] {
+                if gamepad.is_pressed(button) {
+                    println!("Button Pressed: {:?}", button);
+                    let libretro_button = joypad_device_map.get(&button).unwrap();
+                    this_frames_pressed_buttons[*libretro_button] = 1;
+                }
+            }
+        }
+
         let mini_fb_keys_pressed = window.get_keys_pressed(KeyRepeat::No);
         if !mini_fb_keys_pressed.is_empty(){
             for key in mini_fb_keys_pressed {
