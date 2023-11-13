@@ -2,15 +2,13 @@ use minifb::{Key, Window, WindowOptions, KeyRepeat};
 use std::fs::File;
 use std::io::{BufReader, BufRead, Read};
 use std::{fs, ptr, env, thread};
-use std::time::Duration;
-use rodio::{Decoder, OutputStream, Sink};
-use rodio::source::{SineWave, Source};
+use rodio::{OutputStream, Sink};
 use rodio::buffer::SamplesBuffer;
 use std::ffi::{c_void, CString};
 use std::path::{PathBuf, Path};
 use std::collections::HashMap;
 use libloading::Library;
-use libretro_sys::{CoreAPI, GameInfo, PixelFormat};
+use libretro_sys::{CoreAPI, GameInfo, PixelFormat, SystemAvInfo, GameGeometry, SystemTiming};
 use clap::Parser;
 use shellexpand;
 use std::sync::mpsc::{Sender,channel};
@@ -26,10 +24,10 @@ pub const DEVICE_ID_JOYPAD_RIGHT: libc::c_uint = 7;
 pub const DEVICE_ID_JOYPAD_A: libc::c_uint = 8;
 pub const DEVICE_ID_JOYPAD_X: libc::c_uint = 9;
 
-unsafe fn play_audio( sink: &Sink, audio_samples: &Vec<i16>) {
+unsafe fn play_audio( sink: &Sink, audio_samples: &Vec<i16>, sample_rate: u32) {
     if sink.empty() {
         let audio_slice = std::slice::from_raw_parts(audio_samples.as_ptr() as *const i16, audio_samples.len());
-        let source = SamplesBuffer::new(2, 32768, audio_slice);
+        let source = SamplesBuffer::new(2, sample_rate, audio_slice);
         sink.append(source);
         sink.play();
         sink.sleep_until_end();
@@ -244,6 +242,8 @@ struct EmulatorState {
     current_save_slot: u8,
     #[arg(skip)]
     audio_data: Option<Vec<i16>>,
+    #[arg(skip)]
+    av_info: Option<SystemAvInfo>
 }
 
 static mut CURRENT_EMULATOR_STATE: EmulatorState = EmulatorState {
@@ -257,7 +257,8 @@ static mut CURRENT_EMULATOR_STATE: EmulatorState = EmulatorState {
     screen_height: 0,
     buttons_pressed: None,
     current_save_slot: 0,
-    audio_data: None
+    audio_data: None,
+    av_info: None
 };
 
 fn parse_command_line_arguments() -> EmulatorState {
@@ -408,6 +409,22 @@ impl Core {
             }
             (core_api.retro_set_environment)(libretro_environment_callback);
             (core_api.retro_init)();
+            let mut av_info = SystemAvInfo {
+                geometry: GameGeometry {
+                    base_width: 0,
+                    base_height: 0,
+                    max_width: 0,
+                    max_height: 0,
+                    aspect_ratio: 0.0,
+                },
+                timing: SystemTiming {
+                    fps: 0.0,
+                    sample_rate: 0.0,
+                },
+            };
+            (core_api.retro_get_system_av_info)(&mut av_info);
+            println!("AV Info: {:?}", &av_info);
+            CURRENT_EMULATOR_STATE.av_info = Some(av_info);
             
             // Construct and return a Core instance
             Core {
@@ -446,11 +463,17 @@ fn main() {
 
     // Spawn a new thread to play back audio
     let audio_thread = thread::spawn(move || {
+        println!("Audio Thread Started");
+        let sample_rate = unsafe { match &CURRENT_EMULATOR_STATE.av_info {
+            Some(av_info) => av_info.timing.sample_rate,
+            None => 0.0
+        }};
+        let (_stream, stream_handle) = OutputStream::try_default().unwrap();
         let sink = Sink::try_new(&stream_handle).unwrap();
         loop {
             // Receive the next set of audio samples from the channel
             let audio_samples = receiver.recv().unwrap();
-            unsafe { play_audio(&sink, audio_samples); } // pass the audio samples to the play_audio function
+            unsafe { play_audio(&sink, audio_samples, sample_rate as u32); }
         }
     });
 
