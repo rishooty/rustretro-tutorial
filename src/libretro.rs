@@ -1,10 +1,156 @@
-use std::{path::{PathBuf, Path}, fs::File, io::{Read, BufReader, BufRead}, env, collections::HashMap};
-use libc::c_void;
-use libretro_sys::CoreAPI;
-
 use crate::CURRENT_EMULATOR_STATE;
+use libc::c_void;
+use libloading::Library;
+use libretro_sys::{CoreAPI, GameGeometry, PixelFormat, SystemAvInfo, SystemTiming};
+use std::{
+    collections::HashMap,
+    env,
+    fs::File,
+    io::{BufRead, BufReader, Read},
+    path::{Path, PathBuf},
+};
+const EXPECTED_LIB_RETRO_VERSION: u32 = 1;
 
-fn get_save_state_path(save_directory: &String, game_file_name: &str, save_state_index: &u8) -> Option<PathBuf> {
+pub type EnvironmentCallback =
+    unsafe extern "C" fn(command: libc::c_uint, data: *mut libc::c_void) -> bool;
+
+unsafe extern "C" fn libretro_environment_callback(command: u32, return_data: *mut c_void) -> bool {
+    match command {
+        libretro_sys::ENVIRONMENT_GET_CAN_DUPE => {
+            *(return_data as *mut bool) = true; // Set the return_data to the value true
+            println!("ENVIRONMENT_GET_CAN_DUPE");
+        }
+        libretro_sys::ENVIRONMENT_SET_PIXEL_FORMAT => {
+            let pixel_format = *(return_data as *const u32);
+            let pixel_format_as_enum = PixelFormat::from_uint(pixel_format).unwrap();
+            CURRENT_EMULATOR_STATE.pixel_format.0 = pixel_format_as_enum;
+            match pixel_format_as_enum {
+                PixelFormat::ARGB1555 => {
+                    println!(
+                        "Core will send us pixel data in the RETRO_PIXEL_FORMAT_0RGB1555 format"
+                    );
+                    CURRENT_EMULATOR_STATE.bytes_per_pixel = 2;
+                }
+                PixelFormat::RGB565 => {
+                    println!(
+                        "Core will send us pixel data in the RETRO_PIXEL_FORMAT_RGB565 format"
+                    );
+                    CURRENT_EMULATOR_STATE.bytes_per_pixel = 2;
+                }
+                PixelFormat::ARGB8888 => {
+                    println!(
+                        "Core will send us pixel data in the RETRO_PIXEL_FORMAT_XRGB8888 format"
+                    );
+                    CURRENT_EMULATOR_STATE.bytes_per_pixel = 4;
+                }
+                _ => {
+                    panic!("Core is trying to use an Unknown Pixel Format")
+                }
+            }
+            return true;
+        }
+        _ => println!(
+            "libretro_environment_callback Called with command: {}",
+            command
+        ),
+    }
+    false
+}
+
+pub struct Core {
+    dylib: Library,
+    pub api: CoreAPI,
+}
+
+impl Core {
+    pub fn new(core_name: &String) -> Self {
+        unsafe {
+            let dylib = Library::new(core_name).expect("Failed to load Core");
+
+            let core_api = CoreAPI {
+                retro_set_environment: *(dylib.get(b"retro_set_environment").unwrap()),
+                retro_set_video_refresh: *(dylib.get(b"retro_set_video_refresh").unwrap()),
+                retro_set_audio_sample: *(dylib.get(b"retro_set_audio_sample").unwrap()),
+                retro_set_audio_sample_batch: *(dylib
+                    .get(b"retro_set_audio_sample_batch")
+                    .unwrap()),
+                retro_set_input_poll: *(dylib.get(b"retro_set_input_poll").unwrap()),
+                retro_set_input_state: *(dylib.get(b"retro_set_input_state").unwrap()),
+
+                retro_init: *(dylib.get(b"retro_init").unwrap()),
+                retro_deinit: *(dylib.get(b"retro_deinit").unwrap()),
+
+                retro_api_version: *(dylib.get(b"retro_api_version").unwrap()),
+
+                retro_get_system_info: *(dylib.get(b"retro_get_system_info").unwrap()),
+                retro_get_system_av_info: *(dylib.get(b"retro_get_system_av_info").unwrap()),
+                retro_set_controller_port_device: *(dylib
+                    .get(b"retro_set_controller_port_device")
+                    .unwrap()),
+
+                retro_reset: *(dylib.get(b"retro_reset").unwrap()),
+                retro_run: *(dylib.get(b"retro_run").unwrap()),
+
+                retro_serialize_size: *(dylib.get(b"retro_serialize_size").unwrap()),
+                retro_serialize: *(dylib.get(b"retro_serialize").unwrap()),
+                retro_unserialize: *(dylib.get(b"retro_unserialize").unwrap()),
+
+                retro_cheat_reset: *(dylib.get(b"retro_cheat_reset").unwrap()),
+                retro_cheat_set: *(dylib.get(b"retro_cheat_set").unwrap()),
+
+                retro_load_game: *(dylib.get(b"retro_load_game").unwrap()),
+                retro_load_game_special: *(dylib.get(b"retro_load_game_special").unwrap()),
+                retro_unload_game: *(dylib.get(b"retro_unload_game").unwrap()),
+
+                retro_get_region: *(dylib.get(b"retro_get_region").unwrap()),
+                retro_get_memory_data: *(dylib.get(b"retro_get_memory_data").unwrap()),
+                retro_get_memory_size: *(dylib.get(b"retro_get_memory_size").unwrap()),
+            };
+
+            let api_version = (core_api.retro_api_version)();
+            println!("API Version: {}", api_version);
+            if api_version != EXPECTED_LIB_RETRO_VERSION {
+                panic!("The Core has been compiled with a LibRetro API that is unexpected, we expected version to be: {} but it was: {}", EXPECTED_LIB_RETRO_VERSION, api_version)
+            }
+            (core_api.retro_set_environment)(libretro_environment_callback);
+            (core_api.retro_init)();
+            let mut av_info = SystemAvInfo {
+                geometry: GameGeometry {
+                    base_width: 0,
+                    base_height: 0,
+                    max_width: 0,
+                    max_height: 0,
+                    aspect_ratio: 0.0,
+                },
+                timing: SystemTiming {
+                    fps: 0.0,
+                    sample_rate: 0.0,
+                },
+            };
+            (core_api.retro_get_system_av_info)(&mut av_info);
+            println!("AV Info: {:?}", &av_info);
+            CURRENT_EMULATOR_STATE.av_info = Some(av_info);
+
+            // Construct and return a Core instance
+            Core {
+                dylib,
+                api: core_api,
+            }
+        }
+    }
+}
+
+impl Drop for Core {
+    fn drop(&mut self) {
+        // If you need to do any cleanup when the Core is dropped, do it here.
+    }
+}
+
+fn get_save_state_path(
+    save_directory: &String,
+    game_file_name: &str,
+    save_state_index: &u8,
+) -> Option<PathBuf> {
     // Expand the tilde to the home directory
     let expanded_save_directory = shellexpand::tilde(save_directory);
 
@@ -13,7 +159,10 @@ fn get_save_state_path(save_directory: &String, game_file_name: &str, save_state
     if !saves_dir.exists() {
         match std::fs::create_dir_all(&saves_dir) {
             Ok(_) => {}
-            Err(err) => panic!("Failed to create save directory: {:?} Error: {}", &saves_dir, err),
+            Err(err) => panic!(
+                "Failed to create save directory: {:?} Error: {}",
+                &saves_dir, err
+            ),
         }
     }
 
@@ -32,17 +181,34 @@ fn get_save_state_path(save_directory: &String, game_file_name: &str, save_state
 }
 
 pub unsafe fn save_state(core_api: &CoreAPI, save_directory: &String) {
-    let save_state_buffer_size =  (core_api.retro_serialize_size)();
+    let save_state_buffer_size = (core_api.retro_serialize_size)();
     let mut state_buffer: Vec<u8> = vec![0; save_state_buffer_size];
     // Call retro_serialize to create the save state
-    (core_api.retro_serialize)(state_buffer.as_mut_ptr() as *mut c_void, save_state_buffer_size);
-    let file_path = get_save_state_path(save_directory, &CURRENT_EMULATOR_STATE.rom_name, &CURRENT_EMULATOR_STATE.current_save_slot).unwrap(); // hard coded save_slot to 0 for now
+    (core_api.retro_serialize)(
+        state_buffer.as_mut_ptr() as *mut c_void,
+        save_state_buffer_size,
+    );
+    let file_path = get_save_state_path(
+        save_directory,
+        &CURRENT_EMULATOR_STATE.rom_name,
+        &CURRENT_EMULATOR_STATE.current_save_slot,
+    )
+    .unwrap(); // hard coded save_slot to 0 for now
     std::fs::write(&file_path, &state_buffer).unwrap();
-    println!("Save state saved to: {} with size: {}", file_path.display(), save_state_buffer_size);
+    println!(
+        "Save state saved to: {} with size: {}",
+        file_path.display(),
+        save_state_buffer_size
+    );
 }
 
 pub unsafe fn load_state(core_api: &CoreAPI, save_directory: &String) {
-    let file_path = get_save_state_path(save_directory, &CURRENT_EMULATOR_STATE.rom_name, &CURRENT_EMULATOR_STATE.current_save_slot).unwrap(); // Hard coded the save_slot to 0 for now
+    let file_path = get_save_state_path(
+        save_directory,
+        &CURRENT_EMULATOR_STATE.rom_name,
+        &CURRENT_EMULATOR_STATE.current_save_slot,
+    )
+    .unwrap(); // Hard coded the save_slot to 0 for now
     let mut state_buffer = Vec::new();
     match File::open(&file_path) {
         Ok(mut file) => {
@@ -50,7 +216,10 @@ pub unsafe fn load_state(core_api: &CoreAPI, save_directory: &String) {
             match file.read_to_end(&mut state_buffer) {
                 Ok(_) => {
                     // Call retro_unserialize to apply the save state
-                    let result = (core_api.retro_unserialize)(state_buffer.as_mut_ptr() as *mut c_void, state_buffer.len() as usize);
+                    let result = (core_api.retro_unserialize)(
+                        state_buffer.as_mut_ptr() as *mut c_void,
+                        state_buffer.len() as usize,
+                    );
                     if result {
                         println!("Save state loaded from: {}", &file_path.display());
                     } else {
@@ -67,7 +236,8 @@ pub unsafe fn load_state(core_api: &CoreAPI, save_directory: &String) {
 fn get_retroarch_config_path() -> PathBuf {
     return match std::env::consts::OS {
         "windows" => PathBuf::from(env::var("APPDATA").ok().unwrap()).join("retroarch"),
-        "macos" => PathBuf::from(env::var("HOME").ok().unwrap()).join("Library/Application Support/RetroArch"),
+        "macos" => PathBuf::from(env::var("HOME").ok().unwrap())
+            .join("Library/Application Support/RetroArch"),
         _ => PathBuf::from(env::var("XDG_CONFIG_HOME").ok().unwrap()).join("retroarch"),
     };
 }
@@ -79,7 +249,10 @@ fn parse_retroarch_config(config_file: &Path) -> Result<HashMap<String, String>,
     for line in reader.lines() {
         let line = line.map_err(|e| format!("Failed to read line: {}", e))?;
         if let Some((key, value)) = line.split_once("=") {
-            config_map.insert(key.trim().to_string(), value.trim().replace("\"", "").to_string());
+            config_map.insert(
+                key.trim().to_string(),
+                value.trim().replace("\"", "").to_string(),
+            );
         }
     }
     Ok(config_map)
@@ -88,7 +261,8 @@ fn parse_retroarch_config(config_file: &Path) -> Result<HashMap<String, String>,
 pub fn setup_config() -> Result<HashMap<String, String>, String> {
     let retro_arch_config_path = get_retroarch_config_path();
     let our_config = parse_retroarch_config(Path::new("./rustroarch.cfg"));
-    let retro_arch_config = parse_retroarch_config(&retro_arch_config_path.join("config/retroarch.cfg"));
+    let retro_arch_config =
+        parse_retroarch_config(&retro_arch_config_path.join("config/retroarch.cfg"));
     let mut merged_config: HashMap<String, String> = HashMap::from([
         ("input_player1_a", "a"),
         ("input_player1_b", "s"),
@@ -107,16 +281,17 @@ pub fn setup_config() -> Result<HashMap<String, String>, String> {
         ("input_load_state", "f4"),
         ("input_screenshot", "f8"),
         ("savestate_directory", "./states"),
-        ]).iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect();
+    ])
+    .iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect();
     match retro_arch_config {
         Ok(config) => merged_config.extend(config),
-        _ => println!("We don't have RetroArch config")
+        _ => println!("We don't have RetroArch config"),
     }
     match our_config {
         Ok(config) => merged_config.extend(config),
-       _ => println!("We don't have RustroArch config",)
+        _ => println!("We don't have RustroArch config",),
     }
     // println!("retro_arch_config_path: {} merged_config: {:?}", retro_arch_config_path.join("config/retroarch.cfg").display(), merged_config);
     Ok(merged_config)

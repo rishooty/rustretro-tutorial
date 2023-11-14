@@ -1,12 +1,13 @@
 use crate::CURRENT_EMULATOR_STATE;
-use std::sync::mpsc::Sender;
-use rodio::Sink;
 use rodio::buffer::SamplesBuffer;
+use rodio::Sink;
+use std::sync::mpsc::Sender;
 const AUDIO_CHANNELS: usize = 2; // left and right
 
-pub unsafe fn play_audio( sink: &Sink, audio_samples: &Vec<i16>, sample_rate: u32) {
+pub unsafe fn play_audio(sink: &Sink, audio_samples: &Vec<i16>, sample_rate: u32) {
     if sink.empty() {
-        let audio_slice = std::slice::from_raw_parts(audio_samples.as_ptr() as *const i16, audio_samples.len());
+        let audio_slice =
+            std::slice::from_raw_parts(audio_samples.as_ptr() as *const i16, audio_samples.len());
         let source = SamplesBuffer::new(2, sample_rate, audio_slice);
         sink.append(source);
         sink.play();
@@ -32,7 +33,7 @@ pub unsafe fn send_audio_to_thread(sender: &Sender<&Vec<i16>>) {
     match &CURRENT_EMULATOR_STATE.audio_data {
         Some(data) => {
             sender.send(data).unwrap();
-        },
-        None => {},
-    }; 
+        }
+        None => {}
+    };
 }
