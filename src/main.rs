@@ -31,20 +31,6 @@ unsafe extern "C" fn libretro_set_video_refresh_callback(frame_buffer_data: *con
     CURRENT_EMULATOR_STATE.screen_pitch = pitch as u32;
 }
 
-unsafe extern "C" fn libretro_set_input_poll_callback() {
-    println!("libretro_set_input_poll_callback")
-}
-
-unsafe extern "C" fn libretro_set_input_state_callback(port: libc::c_uint, device: libc::c_uint, index: libc::c_uint, id: libc::c_uint) -> i16 {
-    // println!("libretro_set_input_state_callback port: {} device: {} index: {} id: {}", port, device, index, id);
-    let is_pressed = match &CURRENT_EMULATOR_STATE.buttons_pressed {
-        Some(buttons_pressed) => buttons_pressed[id as usize],
-        None => 0
-    };
-
-    return is_pressed;
-}
-
 pub struct EmulatorPixelFormat(PixelFormat);
 
 impl Default for EmulatorPixelFormat {
@@ -52,7 +38,6 @@ impl Default for EmulatorPixelFormat {
         EmulatorPixelFormat(PixelFormat::ARGB8888)
     }
 }
-
 
 #[derive(Parser)]
 struct EmulatorState {
@@ -316,8 +301,8 @@ fn main() {
     unsafe {
         (core_api.retro_init)();
         (core_api.retro_set_video_refresh)(libretro_set_video_refresh_callback);
-        (core_api.retro_set_input_poll)(libretro_set_input_poll_callback);
-        (core_api.retro_set_input_state)(libretro_set_input_state_callback);
+        (core_api.retro_set_input_poll)(input::libretro_set_input_poll_callback);
+        (core_api.retro_set_input_state)(input::libretro_set_input_state_callback);
         (core_api.retro_set_audio_sample)(audio::libretro_set_audio_sample_callback);
         (core_api.retro_set_audio_sample_batch)(audio::libretro_set_audio_sample_batch_callback);
         println!("About to load ROM: {}", &CURRENT_EMULATOR_STATE.rom_name);

@@ -1,5 +1,20 @@
-use gilrs::Button;
 use std::collections::HashMap;
+use gilrs::Button;
+use crate::CURRENT_EMULATOR_STATE;
+
+pub unsafe extern "C" fn libretro_set_input_poll_callback() {
+    println!("libretro_set_input_poll_callback")
+}
+
+pub unsafe extern "C" fn libretro_set_input_state_callback(port: libc::c_uint, device: libc::c_uint, index: libc::c_uint, id: libc::c_uint) -> i16 {
+    // println!("libretro_set_input_state_callback port: {} device: {} index: {} id: {}", port, device, index, id);
+    let is_pressed = match &CURRENT_EMULATOR_STATE.buttons_pressed {
+        Some(buttons_pressed) => buttons_pressed[id as usize],
+        None => 0
+    };
+
+    return is_pressed;
+}
 
 pub fn setup_joypad_device_map() -> HashMap<Button, usize> {
     return HashMap::from([
