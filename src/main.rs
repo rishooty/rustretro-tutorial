@@ -1,9 +1,9 @@
+mod audio;
 use minifb::{Key, Window, WindowOptions, KeyRepeat};
 use std::fs::File;
 use std::io::{BufReader, BufRead, Read};
 use std::{fs, ptr, env, thread};
 use rodio::{OutputStream, Sink};
-use rodio::buffer::SamplesBuffer;
 use std::ffi::{c_void, CString};
 use std::path::{PathBuf, Path};
 use std::collections::HashMap;
@@ -11,8 +11,8 @@ use libloading::Library;
 use libretro_sys::{CoreAPI, GameInfo, PixelFormat, SystemAvInfo, GameGeometry, SystemTiming};
 use clap::Parser;
 use shellexpand;
-use std::sync::mpsc::{Sender,channel};
-use gilrs::{Gilrs, Button, Event, Gamepad, GamepadId};
+use std::sync::mpsc::channel;
+use gilrs::{Gilrs, Button, Event};
 
 pub const DEVICE_ID_JOYPAD_B: libc::c_uint = 0;
 pub const DEVICE_ID_JOYPAD_Y: libc::c_uint = 1;
@@ -84,16 +84,6 @@ fn setup_joypad_device_map() -> HashMap<Button, usize> {
             libretro_sys::DEVICE_ID_JOYPAD_SELECT as usize,
         ),
     ]);
-}
-
-unsafe fn play_audio( sink: &Sink, audio_samples: &Vec<i16>, sample_rate: u32) {
-    if sink.empty() {
-        let audio_slice = std::slice::from_raw_parts(audio_samples.as_ptr() as *const i16, audio_samples.len());
-        let source = SamplesBuffer::new(2, sample_rate, audio_slice);
-        sink.append(source);
-        sink.play();
-        sink.sleep_until_end();
-    }
 }
 
 fn get_save_state_path(save_directory: &String, game_file_name: &str, save_state_index: &u8) -> Option<PathBuf> {
@@ -245,30 +235,6 @@ unsafe extern "C" fn libretro_set_input_state_callback(port: libc::c_uint, devic
     };
 
     return is_pressed;
-}
-
-unsafe extern "C" fn libretro_set_audio_sample_callback(left: i16, right: i16) {
-    println!("libretro_set_audio_sample_callback");
-}
-
-const AUDIO_CHANNELS: usize = 2; // left and right
-unsafe extern "C" fn libretro_set_audio_sample_batch_callback(
-    audio_data: *const i16,
-    frames: libc::size_t,
-) -> libc::size_t {
-    let audio_slice = std::slice::from_raw_parts(audio_data, frames * AUDIO_CHANNELS);
-    CURRENT_EMULATOR_STATE.audio_data = Some(audio_slice.to_vec());
-    return frames;
-}
-
-unsafe fn send_audio_to_thread(sender: &Sender<&Vec<i16>>) {
-    // Send the audio samples to the audio thread using the channel
-    match &CURRENT_EMULATOR_STATE.audio_data {
-        Some(data) => {
-            sender.send(data).unwrap();
-        },
-        None => {},
-    }; 
 }
 
 pub struct EmulatorPixelFormat(PixelFormat);
@@ -535,7 +501,7 @@ fn main() {
         loop {
             // Receive the next set of audio samples from the channel
             let audio_samples = receiver.recv().unwrap();
-            unsafe { play_audio(&sink, audio_samples, sample_rate as u32); }
+            unsafe { audio::play_audio(&sink, audio_samples, sample_rate as u32); }
         }
     });
 
@@ -544,8 +510,8 @@ fn main() {
         (core_api.retro_set_video_refresh)(libretro_set_video_refresh_callback);
         (core_api.retro_set_input_poll)(libretro_set_input_poll_callback);
         (core_api.retro_set_input_state)(libretro_set_input_state_callback);
-        (core_api.retro_set_audio_sample)(libretro_set_audio_sample_callback);
-        (core_api.retro_set_audio_sample_batch)(libretro_set_audio_sample_batch_callback);
+        (core_api.retro_set_audio_sample)(audio::libretro_set_audio_sample_callback);
+        (core_api.retro_set_audio_sample_batch)(audio::libretro_set_audio_sample_batch_callback);
         println!("About to load ROM: {}", &CURRENT_EMULATOR_STATE.rom_name);
         load_rom_file(core_api, &CURRENT_EMULATOR_STATE.rom_name);
     }
@@ -571,9 +537,14 @@ fn main() {
 
     let joypad_device_map = setup_joypad_device_map();
 
-    println!("Gamepad Setup");
     let mut gilrs = Gilrs::new().unwrap();
-    let mut active_gamepad:Option<GamepadId>  = None;
+
+    // Iterate over all connected gamepads
+    for (_id, gamepad) in gilrs.gamepads() {
+        println!("{} is {:?}", gamepad.name(), gamepad.power_info());
+    }
+
+    let mut active_gamepad = None;
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         // Gamepad input Handling
@@ -648,7 +619,7 @@ fn main() {
        unsafe {
         (core_api.retro_run)();
 
-        send_audio_to_thread(&sender);
+        audio::send_audio_to_thread(&sender);
 
         match &CURRENT_EMULATOR_STATE.frame_buffer {
             Some(buffer) => {
