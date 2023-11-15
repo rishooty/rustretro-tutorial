@@ -1,7 +1,7 @@
 use std::ptr;
 use libretro_sys::PixelFormat;
 
-use crate::CURRENT_STATE;
+use crate::{CURRENT_STATE, BYTES_PER_PIXEL};
 
 pub struct EmulatorPixelFormat(pub PixelFormat);
 
@@ -24,7 +24,7 @@ pub unsafe extern "C" fn libretro_set_video_refresh_callback(
     let length_of_frame_buffer: u32;
     {
         let state = CURRENT_STATE.lock().unwrap();
-        length_of_frame_buffer = ((pitch as u32) * height) * state.bytes_per_pixel as u32;
+        length_of_frame_buffer = ((pitch as u32) * height) * BYTES_PER_PIXEL as u32;
     }
 
     let buffer_slice = std::slice::from_raw_parts(

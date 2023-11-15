@@ -9,9 +9,17 @@ use minifb::{Key, KeyRepeat, Window, WindowOptions};
 use once_cell::sync::Lazy;
 use rodio::{OutputStream, Sink};
 use std::ffi::{c_void, CString};
-use std::sync::mpsc::channel;
+use std::sync::mpsc::{self, Sender, channel, Receiver};
 use std::sync::{Arc, Mutex};
 use std::{fs, ptr, thread};
+
+static PIXEL_FORMAT_CHANNEL: Lazy<(Sender<PixelFormat>, Arc<Mutex<Receiver<PixelFormat>>>)> = Lazy::new(|| {
+    let (sender, receiver) = mpsc::channel::<PixelFormat>();
+    (sender, Arc::new(Mutex::new(receiver)))
+});
+
+static mut PIXEL_FORMAT: video::EmulatorPixelFormat = video::EmulatorPixelFormat(PixelFormat::ARGB8888);
+static mut BYTES_PER_PIXEL: u8 = 4;
 
 #[derive(Parser)]
 pub struct EmulatorState {
@@ -21,10 +29,6 @@ pub struct EmulatorState {
     library_name: String,
     #[arg(skip)]
     frame_buffer: Option<Vec<u32>>,
-    #[arg(skip)]
-    pixel_format: video::EmulatorPixelFormat,
-    #[arg(skip)]
-    bytes_per_pixel: u8,
     #[arg(skip)]
     screen_pitch: u32,
     #[arg(skip)]
@@ -46,8 +50,6 @@ static CURRENT_STATE: Lazy<Arc<Mutex<EmulatorState>>> = Lazy::new(|| {
         rom_name: String::new(),
         library_name: String::new(),
         frame_buffer: None,
-        pixel_format: video::EmulatorPixelFormat(PixelFormat::ARGB8888),
-        bytes_per_pixel: 4,
         screen_pitch: 0,
         screen_width: 0,
         screen_height: 0,
@@ -108,7 +110,7 @@ fn main() {
     let core_api = &core.api;
 
     // Create a channel for passing audio samples from the main thread to the audio thread
-    let (sender, receiver) = channel::<Arc<Mutex<Vec<i16>>>>();
+    let (audio_sender, audio_receiver) = channel::<Arc<Mutex<Vec<i16>>>>();
 
     // Extract the sample_rate before spawning the thread
     let sample_rate = {
@@ -125,7 +127,7 @@ fn main() {
         let sink = Sink::try_new(&stream_handle).unwrap();
         loop {
             // Receive the next set of audio samples from the channel
-            let buffer_arc = receiver.recv().unwrap();
+            let buffer_arc = audio_receiver.recv().unwrap();
             let buffer = buffer_arc.lock().unwrap(); // Lock the mutex to access the data
             unsafe {
                 audio::play_audio(&sink, &*buffer, sample_rate as u32);
@@ -258,16 +260,42 @@ fn main() {
                 }
             }
 
-            audio::send_audio_to_thread(&sender, &state);
+            audio::send_audio_to_thread(&audio_sender, &state);
         }
 
         unsafe {
             (core_api.retro_run)();
+            let pixel_format_receiver = &PIXEL_FORMAT_CHANNEL.1.lock().unwrap();
+
+            for pixel_format in  pixel_format_receiver.try_iter() {
+                PIXEL_FORMAT.0 = pixel_format;
+                match pixel_format {
+                    PixelFormat::ARGB1555 => {
+                        println!(
+                            "Core will send us pixel data in the RETRO_PIXEL_FORMAT_0RGB1555 format"
+                        );
+                        BYTES_PER_PIXEL = 2;
+                    }
+                    PixelFormat::RGB565 => {
+                        println!(
+                            "Core will send us pixel data in the RETRO_PIXEL_FORMAT_RGB565 format"
+                        );
+                        BYTES_PER_PIXEL = 2;
+                    }
+                    PixelFormat::ARGB8888 => {
+                        println!(
+                            "Core will send us pixel data in the RETRO_PIXEL_FORMAT_XRGB8888 format"
+                        );
+                        BYTES_PER_PIXEL = 4;
+                    }
+                }
+                // Handle the pixel format update, e.g., updating bytes_per_pixel
+            }
             {
                 let mut state = CURRENT_STATE.lock().unwrap();
                 match &state.frame_buffer {
                     Some(buffer) => {
-                        let width = (state.screen_pitch / state.bytes_per_pixel as u32) as usize;
+                        let width = (state.screen_pitch / BYTES_PER_PIXEL as u32) as usize;
                         let height = state.screen_height as usize;
                         let slice_of_pixel_buffer: &[u32] =
                             std::slice::from_raw_parts(buffer.as_ptr() as *const u32, buffer.len()); // convert to &[u32] slice reference

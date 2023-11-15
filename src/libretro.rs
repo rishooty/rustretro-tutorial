@@ -1,4 +1,4 @@
-use crate::CURRENT_STATE;
+use crate::{CURRENT_STATE, PIXEL_FORMAT_CHANNEL};
 use libc::c_void;
 use libloading::Library;
 use libretro_sys::{CoreAPI, GameGeometry, PixelFormat, SystemAvInfo, SystemTiming};
@@ -19,29 +19,9 @@ unsafe extern "C" fn libretro_environment_callback(command: u32, return_data: *m
         }
         libretro_sys::ENVIRONMENT_SET_PIXEL_FORMAT => {
             let pixel_format = *(return_data as *const u32);
-            let pixel_format_as_enum = PixelFormat::from_uint(pixel_format).unwrap();
-            let mut state = CURRENT_STATE.lock().unwrap();
-            state.pixel_format.0 = pixel_format_as_enum;
-            match pixel_format_as_enum {
-                PixelFormat::ARGB1555 => {
-                    println!(
-                        "Core will send us pixel data in the RETRO_PIXEL_FORMAT_0RGB1555 format"
-                    );
-                    state.bytes_per_pixel = 2;
-                }
-                PixelFormat::RGB565 => {
-                    println!(
-                        "Core will send us pixel data in the RETRO_PIXEL_FORMAT_RGB565 format"
-                    );
-                    state.bytes_per_pixel = 2;
-                }
-                PixelFormat::ARGB8888 => {
-                    println!(
-                        "Core will send us pixel data in the RETRO_PIXEL_FORMAT_XRGB8888 format"
-                    );
-                    state.bytes_per_pixel = 4;
-                }
-            }
+            let sender = &PIXEL_FORMAT_CHANNEL.0; // Use the global sender
+            sender.send(PixelFormat::from_uint(pixel_format).unwrap())
+                  .expect("Failed to send pixel format");
             return true;
         }
         _ => println!(
