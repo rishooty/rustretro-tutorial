@@ -36,7 +36,7 @@ struct EmulatorState {
     #[arg(skip)]
     current_save_slot: u8,
     #[arg(skip)]
-    audio_data:  Option<Arc<Mutex<Vec<i16>>>>,
+    audio_data: Option<Arc<Mutex<Vec<i16>>>>,
     #[arg(skip)]
     av_info: Option<SystemAvInfo>,
 }
@@ -68,15 +68,12 @@ fn parse_command_line_arguments() -> (String, String) {
 }
 
 pub unsafe fn load_rom_file(core_api: &CoreAPI, rom_name: &String) -> bool {
-    let cstr_rom_name = CString::new(rom_name.clone())
-        .expect("Failed to create CString");
-    let rom_name_cptr = cstr_rom_name.as_ptr();
-
+    let cstr_rom_name = CString::new(rom_name.clone()).expect("Failed to create CString");
     let contents = fs::read(rom_name).expect("Failed to read file");
     let data: *const c_void = contents.as_ptr() as *const c_void;
 
     let game_info = GameInfo {
-        path: rom_name_cptr,
+        path: cstr_rom_name.as_ptr(),
         data,
         size: contents.len(),
         meta: ptr::null(),
@@ -86,19 +83,19 @@ pub unsafe fn load_rom_file(core_api: &CoreAPI, rom_name: &String) -> bool {
     if !was_load_successful {
         panic!("Rom Load was not successful");
     }
-
     return was_load_successful;
 }
-
 
 const WIDTH: usize = 256;
 const HEIGHT: usize = 140;
 
 fn main() {
     let (rom_name, library_name) = parse_command_line_arguments();
-    let mut state = CURRENT_STATE.lock().unwrap();
-    state.rom_name = rom_name;
-    state.library_name = library_name;
+    {
+        let mut state = CURRENT_STATE.lock().unwrap();
+        state.rom_name = rom_name;
+        state.library_name = library_name;
+    }
 
     let mut window = Window::new("Rust Game", WIDTH, HEIGHT, WindowOptions::default())
         .unwrap_or_else(|e| {
@@ -112,7 +109,6 @@ fn main() {
 
     // Create a channel for passing audio samples from the main thread to the audio thread
     let (sender, receiver) = channel::<Arc<Mutex<Vec<i16>>>>();
-
 
     // Extract the sample_rate before spawning the thread
     let sample_rate = {
@@ -130,7 +126,7 @@ fn main() {
         loop {
             // Receive the next set of audio samples from the channel
             let buffer_arc = receiver.recv().unwrap();
-            let buffer = buffer_arc.lock().unwrap();  // Lock the mutex to access the data
+            let buffer = buffer_arc.lock().unwrap(); // Lock the mutex to access the data
             unsafe {
                 audio::play_audio(&sink, &*buffer, sample_rate as u32);
             }
@@ -144,8 +140,11 @@ fn main() {
         (core_api.retro_set_input_state)(input::libretro_set_input_state_callback);
         (core_api.retro_set_audio_sample)(audio::libretro_set_audio_sample_callback);
         (core_api.retro_set_audio_sample_batch)(audio::libretro_set_audio_sample_batch_callback);
-        println!("About to load ROM: {}", &state.rom_name);
-        load_rom_file(core_api, &state.rom_name);
+        {
+            let state = CURRENT_STATE.lock().unwrap();
+            println!("About to load ROM: {}", &state.rom_name);
+            load_rom_file(core_api, &state.rom_name);
+        }
     }
 
     let mut this_frames_pressed_buttons = vec![0; 16];
@@ -205,6 +204,7 @@ fn main() {
                     continue;
                 }
                 if &key_as_string == &config["input_state_slot_increase"] {
+                    let mut state = CURRENT_STATE.lock().unwrap();
                     if state.current_save_slot != 255 {
                         state.current_save_slot += 1;
                         println!(
@@ -217,6 +217,7 @@ fn main() {
                 }
 
                 if &key_as_string == &config["input_state_slot_decrease"] {
+                    let mut state = CURRENT_STATE.lock().unwrap();
                     if state.current_save_slot != 0 {
                         state.current_save_slot -= 1;
                         println!(
@@ -246,11 +247,12 @@ fn main() {
             }
         }
 
+        audio::send_audio_to_thread(&sender);
+
         unsafe {
             (core_api.retro_run)();
 
-            audio::send_audio_to_thread(&sender);
-
+            let mut state = CURRENT_STATE.lock().unwrap();
             match &state.frame_buffer {
                 Some(buffer) => {
                     let width = (state.screen_pitch / state.bytes_per_pixel as u32) as usize;
@@ -270,6 +272,7 @@ fn main() {
                     println!("We don't have a buffer to display");
                 }
             }
+
             state.buttons_pressed = Some(this_frames_pressed_buttons.clone());
         }
     }

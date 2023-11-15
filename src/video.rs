@@ -17,13 +17,16 @@ pub unsafe extern "C" fn libretro_set_video_refresh_callback(
     height: libc::c_uint,
     pitch: libc::size_t,
 ) {
-    let mut state = CURRENT_STATE.lock().unwrap();
     if frame_buffer_data == ptr::null() {
         println!("frame_buffer_data was null");
         return;
     }
-    let length_of_frame_buffer =
-        ((pitch as u32) * height) * state.bytes_per_pixel as u32;
+    let length_of_frame_buffer: u32;
+    {
+        let state = CURRENT_STATE.lock().unwrap();
+        length_of_frame_buffer = ((pitch as u32) * height) * state.bytes_per_pixel as u32;
+    }
+
     let buffer_slice = std::slice::from_raw_parts(
         frame_buffer_data as *const u8,
         length_of_frame_buffer as usize,
@@ -34,10 +37,13 @@ pub unsafe extern "C" fn libretro_set_video_refresh_callback(
     let buffer_vec = Vec::from(result);
 
     // Wrap the Vec<u8> in an Some Option and assign it to the frame_buffer field
-    state.frame_buffer = Some(buffer_vec);
-    state.screen_height = height;
-    state.screen_width = width;
-    state.screen_pitch = pitch as u32;
+    {
+        let mut state = CURRENT_STATE.lock().unwrap();
+        state.frame_buffer = Some(buffer_vec);
+        state.screen_height = height;
+        state.screen_width = width;
+        state.screen_pitch = pitch as u32;
+    }
 }
 
 fn convert_pixel_array_from_rgb565_to_xrgb8888(color_array: &[u8]) -> Box<[u32]> {

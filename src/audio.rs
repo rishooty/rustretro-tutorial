@@ -40,7 +40,9 @@ pub unsafe extern "C" fn libretro_set_audio_sample_batch_callback(
     frames: libc::size_t,
 ) -> libc::size_t {
     let mut pool = BUFFER_POOL.lock().unwrap();
-    let buffer_arc = pool.pop().unwrap_or_else(|| Arc::new(Mutex::new(vec![0; BUFFER_LENGTH])));
+    let buffer_arc = pool
+        .pop()
+        .unwrap_or_else(|| Arc::new(Mutex::new(vec![0; BUFFER_LENGTH])));
 
     {
         let mut buffer = buffer_arc.lock().unwrap();
@@ -49,17 +51,16 @@ pub unsafe extern "C" fn libretro_set_audio_sample_batch_callback(
         buffer.extend_from_slice(audio_slice);
     }
 
-    let mut state = CURRENT_STATE.lock().unwrap();
-    // Clone buffer_arc before assigning it
-    state.audio_data = Some(buffer_arc.clone());
-
+    {
+        let mut state = CURRENT_STATE.lock().unwrap();
+        // Clone buffer_arc before assigning it
+        state.audio_data = Some(buffer_arc.clone());
+    }
     // Now it's safe to push the original buffer_arc back into the pool
     pool.push(buffer_arc);
 
     frames
 }
-
-
 
 pub fn send_audio_to_thread(sender: &Sender<Arc<Mutex<Vec<i16>>>>) {
     let buffer_arc_clone = {
@@ -71,4 +72,3 @@ pub fn send_audio_to_thread(sender: &Sender<Arc<Mutex<Vec<i16>>>>) {
         sender.send(buffer_arc).unwrap();
     }
 }
-

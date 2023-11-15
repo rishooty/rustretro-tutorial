@@ -12,8 +12,6 @@ use std::{
 const EXPECTED_LIB_RETRO_VERSION: u32 = 1;
 
 unsafe extern "C" fn libretro_environment_callback(command: u32, return_data: *mut c_void) -> bool {
-    let mut state = CURRENT_STATE.lock().unwrap();
-
     match command {
         libretro_sys::ENVIRONMENT_GET_CAN_DUPE => {
             *(return_data as *mut bool) = true; // Set the return_data to the value true
@@ -22,6 +20,7 @@ unsafe extern "C" fn libretro_environment_callback(command: u32, return_data: *m
         libretro_sys::ENVIRONMENT_SET_PIXEL_FORMAT => {
             let pixel_format = *(return_data as *const u32);
             let pixel_format_as_enum = PixelFormat::from_uint(pixel_format).unwrap();
+            let mut state = CURRENT_STATE.lock().unwrap();
             state.pixel_format.0 = pixel_format_as_enum;
             match pixel_format_as_enum {
                 PixelFormat::ARGB1555 => {
@@ -61,8 +60,12 @@ pub struct Core {
 impl Core {
     pub fn new() -> Self {
         unsafe {
-            let mut state = CURRENT_STATE.lock().unwrap();
-            let dylib = Library::new(&state.library_name).expect("Failed to load Core");
+            let dylib: Library;
+
+            {
+                let state = CURRENT_STATE.lock().unwrap();
+                dylib = Library::new(&state.library_name).expect("Failed to load Core");
+            }
 
             let core_api = CoreAPI {
                 retro_set_environment: *(dylib.get(b"retro_set_environment").unwrap()),
@@ -126,7 +129,10 @@ impl Core {
             };
             (core_api.retro_get_system_av_info)(&mut av_info);
             println!("AV Info: {:?}", &av_info);
-            state.av_info = Some(av_info);
+            {
+                let mut state = CURRENT_STATE.lock().unwrap();
+                state.av_info = Some(av_info);
+            }
 
             // Construct and return a Core instance
             Core {
@@ -178,7 +184,6 @@ fn get_save_state_path(
 }
 
 pub unsafe fn save_state(core_api: &CoreAPI, save_directory: &String) {
-    let state = CURRENT_STATE.lock().unwrap();
     let save_state_buffer_size = (core_api.retro_serialize_size)();
     let mut state_buffer: Vec<u8> = vec![0; save_state_buffer_size];
     // Call retro_serialize to create the save state
@@ -186,12 +191,13 @@ pub unsafe fn save_state(core_api: &CoreAPI, save_directory: &String) {
         state_buffer.as_mut_ptr() as *mut c_void,
         save_state_buffer_size,
     );
-    let file_path = get_save_state_path(
-        save_directory,
-        &state.rom_name,
-        &state.current_save_slot,
-    )
-    .unwrap(); // hard coded save_slot to 0 for now
+    let file_path: PathBuf;
+    {
+        let state = CURRENT_STATE.lock().unwrap();
+        file_path =
+            get_save_state_path(save_directory, &state.rom_name, &state.current_save_slot).unwrap();
+        // hard coded save_slot to 0 for now
+    }
     std::fs::write(&file_path, &state_buffer).unwrap();
     println!(
         "Save state saved to: {} with size: {}",
@@ -201,13 +207,13 @@ pub unsafe fn save_state(core_api: &CoreAPI, save_directory: &String) {
 }
 
 pub unsafe fn load_state(core_api: &CoreAPI, save_directory: &String) {
-    let state = CURRENT_STATE.lock().unwrap();
-    let file_path = get_save_state_path(
-        save_directory,
-        &state.rom_name,
-        &state.current_save_slot,
-    )
-    .unwrap(); // Hard coded the save_slot to 0 for now
+    let file_path: PathBuf;
+    {
+        let state = CURRENT_STATE.lock().unwrap();
+        file_path =
+            get_save_state_path(save_directory, &state.rom_name, &state.current_save_slot).unwrap();
+        // Hard coded the save_slot to 0 for now
+    }
     let mut state_buffer = Vec::new();
     match File::open(&file_path) {
         Ok(mut file) => {
