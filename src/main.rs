@@ -2,6 +2,7 @@ mod audio;
 mod input;
 mod libretro;
 mod video;
+use audio::AudioBuffer;
 use clap::Parser;
 use gilrs::{Event, Gilrs};
 use libretro_sys::{CoreAPI, GameInfo, PixelFormat, SystemAvInfo};
@@ -9,34 +10,29 @@ use minifb::{Key, KeyRepeat, Window, WindowOptions};
 use once_cell::sync::Lazy;
 use rodio::{OutputStream, Sink};
 use std::ffi::{c_void, CString};
-use std::sync::mpsc::{self, channel, Receiver, Sender};
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::{fs, ptr, thread};
-use std::sync::atomic::{AtomicU8, Ordering};
 
 static BUTTONS_PRESSED: Mutex<(Vec<i16>, Vec<i16>)> = Mutex::new((vec![], vec![]));
 
 static BYTES_PER_PIXEL: AtomicU8 = AtomicU8::new(4); // Default value of 4
 
-static BUTTONS_PRESSED_SENDER: Lazy<Sender<Vec<i16>>> = Lazy::new(|| {
-    let (sender, _receiver) = mpsc::channel();
-    sender
-});
-
 static PIXEL_FORMAT_CHANNEL: Lazy<(Sender<PixelFormat>, Arc<Mutex<Receiver<PixelFormat>>>)> =
     Lazy::new(|| {
-        let (sender, receiver) = mpsc::channel::<PixelFormat>();
+        let (sender, receiver) = channel::<PixelFormat>();
         (sender, Arc::new(Mutex::new(receiver)))
     });
 
-static VIDEO_DATA_SENDER: Lazy<Sender<VideoData>> = Lazy::new(|| {
-    let (sender, _receiver) = mpsc::channel();
-    sender
+static VIDEO_DATA_CHANNEL: Lazy<(Sender<VideoData>, Arc<Mutex<Receiver<VideoData>>>)> = Lazy::new(|| {
+    let (sender, receiver) = channel::<VideoData>();
+    (sender, Arc::new(Mutex::new(receiver)))
 });
 
-static AUDIO_DATA_SENDER: Lazy<Sender<Arc<Mutex<Vec<i16>>>>> = Lazy::new(|| {
-    let (sender, _receiver) = mpsc::channel();
-    sender
+static AUDIO_DATA_CHANNEL: Lazy<(Sender<Arc<Mutex<AudioBuffer>>>, Arc<Mutex<Receiver<Arc<Mutex<AudioBuffer>>>>>)> = Lazy::new(|| {
+    let (sender, receiver) = channel::<Arc<Mutex<AudioBuffer>>>();
+    (sender, Arc::new(Mutex::new(receiver)))
 });
 
 struct VideoData {
@@ -104,7 +100,6 @@ const WIDTH: usize = 256;
 const HEIGHT: usize = 140;
 
 fn main() {
-    let (_video_data_sender, video_data_receiver) = mpsc::channel::<VideoData>();
     let (rom_name, library_name) = parse_command_line_arguments();
     let mut current_state = EmulatorState {
         rom_name,
@@ -131,9 +126,6 @@ fn main() {
     let core_api = &core.api;
     current_state = updated_state;
 
-    // Create a channel for passing audio samples from the main thread to the audio thread
-    let (audio_sender, audio_receiver) = channel::<Arc<Mutex<Vec<i16>>>>();
-
     // Extract the sample_rate before spawning the thread
     let sample_rate = current_state
         .av_info
@@ -145,11 +137,12 @@ fn main() {
         let (_stream, stream_handle) = OutputStream::try_default().unwrap();
         let sink = Sink::try_new(&stream_handle).unwrap();
         loop {
-            // Receive the next set of audio samples from the channel
-            let buffer_arc = audio_receiver.recv().unwrap();
-            let buffer = buffer_arc.lock().unwrap(); // Lock the mutex to access the data
-            unsafe {
-                audio::play_audio(&sink, &*buffer, sample_rate as u32);
+            let receiver = AUDIO_DATA_CHANNEL.1.lock().unwrap();
+            for buffer_arc in receiver.try_iter() {
+                let buffer = buffer_arc.lock().unwrap(); // Lock the mutex to access the data
+                unsafe {
+                    audio::play_audio(&sink, &*buffer, sample_rate as u32);
+                }
             }
         }
     });
@@ -276,6 +269,7 @@ fn main() {
         unsafe {
             (core_api.retro_run)();
             let pixel_format_receiver = &PIXEL_FORMAT_CHANNEL.1.lock().unwrap();
+            let video_data_receiver = VIDEO_DATA_CHANNEL.1.lock().unwrap();
 
             for pixel_format in pixel_format_receiver.try_iter() {
                 current_state.pixel_format.0 = pixel_format;
@@ -318,8 +312,15 @@ fn main() {
 
             {
                 let mut buttons = BUTTONS_PRESSED.lock().unwrap();
-                buttons.1 = this_frames_pressed_buttons; // Update the next frame vector
-                std::mem::swap(&mut buttons.0, &mut buttons.1); // Swap current and next frame vectors
+
+                // Temporarily replace `buttons.1` with an empty Vec
+                let mut temp = std::mem::take(&mut buttons.1);
+
+                // Swap the values
+                std::mem::swap(&mut buttons.0, &mut temp);
+
+                // Put the original `buttons.1` back
+                buttons.1 = temp;
             }
         }
     }

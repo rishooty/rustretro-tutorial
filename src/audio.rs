@@ -2,13 +2,48 @@ use once_cell::sync::Lazy;
 use rodio::buffer::SamplesBuffer;
 use rodio::Sink;
 use std::sync::{Arc, Mutex};
-use crate::AUDIO_DATA_SENDER;
+use crate::AUDIO_DATA_CHANNEL;
 
 const AUDIO_CHANNELS: usize = 2; // left and right
 const SAMPLE_RATE: u32 = 44_100; // 44.1 kHz
 const BUFFER_DURATION_MS: u32 = 16; // Roughly 1/60th of a second
 const BUFFER_LENGTH: usize = (SAMPLE_RATE as u32 * BUFFER_DURATION_MS / 1000) as usize; // Number of samples per buffer
 const POOL_SIZE: usize = 10; // Number of buffers in the pool
+
+pub struct AudioBuffer {
+    data: Vec<i16>,
+}
+
+impl AudioBuffer {
+    // Constructor to create a new AudioBuffer with a specified size
+    pub fn new(size: usize) -> Self {
+        AudioBuffer {
+            data: vec![0; size],
+        }
+    }
+
+    // Method to clear the buffer
+    pub fn clear(&mut self) {
+        self.data.clear();
+    }
+
+    // Method to extend the buffer from a slice
+    pub fn extend_from_slice(&mut self, slice: &[i16]) {
+        self.data.extend_from_slice(slice);
+    }
+
+    pub fn as_ptr(&self) -> *const i16 {
+        self.data.as_ptr()
+    }
+
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    // Additional methods as needed...
+    // For example, methods to manipulate the audio data, etc.
+}
+
 
 static BUFFER_POOL: Lazy<Mutex<Vec<Arc<Mutex<Vec<i16>>>>>> = Lazy::new(|| {
     let mut pool = Vec::new();
@@ -18,7 +53,7 @@ static BUFFER_POOL: Lazy<Mutex<Vec<Arc<Mutex<Vec<i16>>>>>> = Lazy::new(|| {
     Mutex::new(pool)
 });
 
-pub unsafe fn play_audio(sink: &Sink, audio_samples: &Vec<i16>, sample_rate: u32) {
+pub unsafe fn play_audio(sink: &Sink, audio_samples: &AudioBuffer, sample_rate: u32) {
     if sink.empty() {
         let audio_slice =
             std::slice::from_raw_parts(audio_samples.as_ptr() as *const i16, audio_samples.len());
@@ -46,13 +81,16 @@ pub unsafe extern "C" fn libretro_set_audio_sample_batch_callback(
     }
 
     {
-        let mut buffer = buffer_arc.lock().unwrap();
+        let mut buffer = AudioBuffer::new(BUFFER_LENGTH);
         let audio_slice = std::slice::from_raw_parts(audio_data, frames * AUDIO_CHANNELS);
         buffer.clear();
         buffer.extend_from_slice(audio_slice);
+        let buffer_arc = Arc::new(Mutex::new(buffer));
+        if let Err(e) = AUDIO_DATA_CHANNEL.0.send(buffer_arc.clone()) {
+            eprintln!("Failed to send audio data: {:?}", e);
+        }
     }
 
-    AUDIO_DATA_SENDER.send(buffer_arc.clone()).expect("Failed to send audio data");
 
     // Now it's safe to push the original buffer_arc back into the pool
     {

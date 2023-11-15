@@ -1,7 +1,7 @@
 use libretro_sys::PixelFormat;
 use std::sync::atomic::Ordering;
 
-use crate::{VIDEO_DATA_SENDER, VideoData, BYTES_PER_PIXEL};
+use crate::{VideoData, BYTES_PER_PIXEL, VIDEO_DATA_CHANNEL};
 
 pub struct EmulatorPixelFormat(pub PixelFormat);
 
@@ -37,7 +37,10 @@ pub unsafe extern "C" fn libretro_set_video_refresh_callback(
         pitch: pitch as u32,
     };
 
-    VIDEO_DATA_SENDER.send(video_data).expect("Failed to send video data");
+    if let Err(e) = VIDEO_DATA_CHANNEL.0.send(video_data) {
+        eprintln!("Failed to send video data: {:?}", e);
+        // Handle error appropriately
+    }
 }
 
 
