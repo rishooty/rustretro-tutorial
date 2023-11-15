@@ -1,4 +1,4 @@
-use crate::CURRENT_EMULATOR_STATE;
+use crate::CURRENT_STATE;
 use libc::c_void;
 use libloading::Library;
 use libretro_sys::{CoreAPI, GameGeometry, PixelFormat, SystemAvInfo, SystemTiming};
@@ -15,6 +15,8 @@ pub type EnvironmentCallback =
     unsafe extern "C" fn(command: libc::c_uint, data: *mut libc::c_void) -> bool;
 
 unsafe extern "C" fn libretro_environment_callback(command: u32, return_data: *mut c_void) -> bool {
+    let mut state = CURRENT_STATE.lock().unwrap();
+
     match command {
         libretro_sys::ENVIRONMENT_GET_CAN_DUPE => {
             *(return_data as *mut bool) = true; // Set the return_data to the value true
@@ -23,28 +25,25 @@ unsafe extern "C" fn libretro_environment_callback(command: u32, return_data: *m
         libretro_sys::ENVIRONMENT_SET_PIXEL_FORMAT => {
             let pixel_format = *(return_data as *const u32);
             let pixel_format_as_enum = PixelFormat::from_uint(pixel_format).unwrap();
-            CURRENT_EMULATOR_STATE.pixel_format.0 = pixel_format_as_enum;
+            state.pixel_format.0 = pixel_format_as_enum;
             match pixel_format_as_enum {
                 PixelFormat::ARGB1555 => {
                     println!(
                         "Core will send us pixel data in the RETRO_PIXEL_FORMAT_0RGB1555 format"
                     );
-                    CURRENT_EMULATOR_STATE.bytes_per_pixel = 2;
+                    state.bytes_per_pixel = 2;
                 }
                 PixelFormat::RGB565 => {
                     println!(
                         "Core will send us pixel data in the RETRO_PIXEL_FORMAT_RGB565 format"
                     );
-                    CURRENT_EMULATOR_STATE.bytes_per_pixel = 2;
+                    state.bytes_per_pixel = 2;
                 }
                 PixelFormat::ARGB8888 => {
                     println!(
                         "Core will send us pixel data in the RETRO_PIXEL_FORMAT_XRGB8888 format"
                     );
-                    CURRENT_EMULATOR_STATE.bytes_per_pixel = 4;
-                }
-                _ => {
-                    panic!("Core is trying to use an Unknown Pixel Format")
+                    state.bytes_per_pixel = 4;
                 }
             }
             return true;
@@ -63,9 +62,10 @@ pub struct Core {
 }
 
 impl Core {
-    pub fn new(core_name: &String) -> Self {
+    pub fn new() -> Self {
         unsafe {
-            let dylib = Library::new(core_name).expect("Failed to load Core");
+            let mut state = CURRENT_STATE.lock().unwrap();
+            let dylib = Library::new(&state.library_name).expect("Failed to load Core");
 
             let core_api = CoreAPI {
                 retro_set_environment: *(dylib.get(b"retro_set_environment").unwrap()),
@@ -129,7 +129,7 @@ impl Core {
             };
             (core_api.retro_get_system_av_info)(&mut av_info);
             println!("AV Info: {:?}", &av_info);
-            CURRENT_EMULATOR_STATE.av_info = Some(av_info);
+            state.av_info = Some(av_info);
 
             // Construct and return a Core instance
             Core {
@@ -181,6 +181,7 @@ fn get_save_state_path(
 }
 
 pub unsafe fn save_state(core_api: &CoreAPI, save_directory: &String) {
+    let state = CURRENT_STATE.lock().unwrap();
     let save_state_buffer_size = (core_api.retro_serialize_size)();
     let mut state_buffer: Vec<u8> = vec![0; save_state_buffer_size];
     // Call retro_serialize to create the save state
@@ -190,8 +191,8 @@ pub unsafe fn save_state(core_api: &CoreAPI, save_directory: &String) {
     );
     let file_path = get_save_state_path(
         save_directory,
-        &CURRENT_EMULATOR_STATE.rom_name,
-        &CURRENT_EMULATOR_STATE.current_save_slot,
+        &state.rom_name,
+        &state.current_save_slot,
     )
     .unwrap(); // hard coded save_slot to 0 for now
     std::fs::write(&file_path, &state_buffer).unwrap();
@@ -203,10 +204,11 @@ pub unsafe fn save_state(core_api: &CoreAPI, save_directory: &String) {
 }
 
 pub unsafe fn load_state(core_api: &CoreAPI, save_directory: &String) {
+    let state = CURRENT_STATE.lock().unwrap();
     let file_path = get_save_state_path(
         save_directory,
-        &CURRENT_EMULATOR_STATE.rom_name,
-        &CURRENT_EMULATOR_STATE.current_save_slot,
+        &state.rom_name,
+        &state.current_save_slot,
     )
     .unwrap(); // Hard coded the save_slot to 0 for now
     let mut state_buffer = Vec::new();

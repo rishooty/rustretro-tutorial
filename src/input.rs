@@ -1,8 +1,9 @@
-use crate::CURRENT_EMULATOR_STATE;
 use gilrs::Button;
 use std::collections::HashMap;
 
-pub const buttonArray: [Button; 14] = [
+use crate::CURRENT_STATE;
+
+pub const BUTTON_ARRAY: [Button; 14] = [
     Button::South,
     Button::North,
     Button::East,
@@ -82,8 +83,9 @@ pub unsafe extern "C" fn libretro_set_input_state_callback(
     index: libc::c_uint,
     id: libc::c_uint,
 ) -> i16 {
+    let state = CURRENT_STATE.lock().unwrap();
     // println!("libretro_set_input_state_callback port: {} device: {} index: {} id: {}", port, device, index, id);
-    let is_pressed = match &CURRENT_EMULATOR_STATE.buttons_pressed {
+    let is_pressed = match &state.buttons_pressed {
         Some(buttons_pressed) => buttons_pressed[id as usize],
         None => 0,
     };

@@ -1198,6 +1198,7 @@ dependencies = [
  "libloading 0.7.4",
  "libretro-sys",
  "minifb",
+ "once_cell",
  "rand",
  "rodio",
  "shellexpand",

@@ -6,9 +6,11 @@ use clap::Parser;
 use gilrs::{Event, Gilrs};
 use libretro_sys::{CoreAPI, GameInfo, PixelFormat, SystemAvInfo};
 use minifb::{Key, KeyRepeat, Window, WindowOptions};
+use once_cell::sync::Lazy;
 use rodio::{OutputStream, Sink};
 use std::ffi::{c_void, CString};
 use std::sync::mpsc::channel;
+use std::sync::{Arc, Mutex};
 use std::{fs, ptr, thread};
 
 #[derive(Parser)]
@@ -39,27 +41,30 @@ struct EmulatorState {
     av_info: Option<SystemAvInfo>,
 }
 
-static mut CURRENT_EMULATOR_STATE: EmulatorState = EmulatorState {
-    rom_name: String::new(),
-    library_name: String::new(),
-    frame_buffer: None,
-    pixel_format: video::EmulatorPixelFormat(PixelFormat::ARGB8888),
-    bytes_per_pixel: 4,
-    screen_pitch: 0,
-    screen_width: 0,
-    screen_height: 0,
-    buttons_pressed: None,
-    current_save_slot: 0,
-    audio_data: None,
-    av_info: None,
-};
+static CURRENT_STATE: Lazy<Arc<Mutex<EmulatorState>>> = Lazy::new(|| {
+    Arc::new(Mutex::new(EmulatorState {
+        rom_name: String::new(),
+        library_name: String::new(),
+        frame_buffer: None,
+        pixel_format: video::EmulatorPixelFormat(PixelFormat::ARGB8888),
+        bytes_per_pixel: 4,
+        screen_pitch: 0,
+        screen_width: 0,
+        screen_height: 0,
+        buttons_pressed: None,
+        current_save_slot: 0,
+        audio_data: None,
+        av_info: None,
+    }))
+});
 
-fn parse_command_line_arguments() -> EmulatorState {
+fn parse_command_line_arguments() -> (String, String) {
     let emulator_state = EmulatorState::parse();
 
     println!("ROM name: {}", emulator_state.rom_name);
     println!("Core Library name: {}", emulator_state.library_name);
-    return emulator_state;
+
+    (emulator_state.rom_name, emulator_state.library_name)
 }
 
 unsafe fn load_rom_file(core_api: &CoreAPI, rom_name: &String) -> bool {
@@ -75,7 +80,7 @@ unsafe fn load_rom_file(core_api: &CoreAPI, rom_name: &String) -> bool {
         meta: ptr::null(),
     };
     let was_load_successful = (core_api.retro_load_game)(&game_info);
-    if (!was_load_successful) {
+    if !was_load_successful {
         panic!("Rom Load was not successful");
     }
     return was_load_successful;
@@ -85,7 +90,10 @@ const WIDTH: usize = 256;
 const HEIGHT: usize = 140;
 
 fn main() {
-    unsafe { CURRENT_EMULATOR_STATE = parse_command_line_arguments() };
+    let (rom_name, library_name) = parse_command_line_arguments();
+    let mut state = CURRENT_STATE.lock().unwrap();
+    state.rom_name = rom_name;
+    state.library_name = library_name;
 
     let mut window = Window::new("Rust Game", WIDTH, HEIGHT, WindowOptions::default())
         .unwrap_or_else(|e| {
@@ -94,23 +102,24 @@ fn main() {
 
     window.limit_update_rate(Some(std::time::Duration::from_micros(16600))); // ~60fps
 
-    let core = libretro::Core::new(unsafe { &CURRENT_EMULATOR_STATE.library_name });
+    let core = libretro::Core::new();
     let core_api = &core.api;
-    // Audio Setup
-    let (_stream, stream_handle) = OutputStream::try_default().unwrap();
 
     // Create a channel for passing audio samples from the main thread to the audio thread
     let (sender, receiver) = channel();
 
+    // Extract the sample_rate before spawning the thread
+    let sample_rate = {
+        let state = CURRENT_STATE.lock().unwrap();
+        state
+            .av_info
+            .as_ref()
+            .map_or(0.0, |av_info| av_info.timing.sample_rate)
+    };
+
     // Spawn a new thread to play back audio
-    let audio_thread = thread::spawn(move || {
+    let _audio_thread = thread::spawn(move || {
         println!("Audio Thread Started");
-        let sample_rate = unsafe {
-            match &CURRENT_EMULATOR_STATE.av_info {
-                Some(av_info) => av_info.timing.sample_rate,
-                None => 0.0,
-            }
-        };
         let (_stream, stream_handle) = OutputStream::try_default().unwrap();
         let sink = Sink::try_new(&stream_handle).unwrap();
         loop {
@@ -129,8 +138,8 @@ fn main() {
         (core_api.retro_set_input_state)(input::libretro_set_input_state_callback);
         (core_api.retro_set_audio_sample)(audio::libretro_set_audio_sample_callback);
         (core_api.retro_set_audio_sample_batch)(audio::libretro_set_audio_sample_batch_callback);
-        println!("About to load ROM: {}", &CURRENT_EMULATOR_STATE.rom_name);
-        load_rom_file(core_api, &CURRENT_EMULATOR_STATE.rom_name);
+        println!("About to load ROM: {}", &state.rom_name);
+        load_rom_file(core_api, &state.rom_name);
     }
 
     let mut this_frames_pressed_buttons = vec![0; 16];
@@ -153,14 +162,14 @@ fn main() {
     while window.is_open() && !window.is_key_down(Key::Escape) {
         // Gamepad input Handling
         // Examine new events to check which gamepad is currently being used
-        while let Some(Event { id, event, time }) = gilrs.next_event() {
+        while let Some(Event { id, .. }) = gilrs.next_event() {
             // println!("{:?} New event from {}: {:?}", time, id, event);
             active_gamepad = Some(id);
         }
 
         // Now Lets check what buttons are pressed and map them to the libRetro buttons
         if let Some(gamepad) = active_gamepad.map(|id| gilrs.gamepad(id)) {
-            for button in input::buttonArray {
+            for button in input::BUTTON_ARRAY {
                 if gamepad.is_pressed(button) {
                     println!("Button Pressed: {:?}", button);
                     let libretro_button = joypad_device_map.get(&button).unwrap();
@@ -190,28 +199,26 @@ fn main() {
                     continue;
                 }
                 if &key_as_string == &config["input_state_slot_increase"] {
-                    unsafe {
-                        if CURRENT_EMULATOR_STATE.current_save_slot != 255 {
-                            CURRENT_EMULATOR_STATE.current_save_slot += 1;
-                            println!(
-                                "Current save slot increased to: {}",
-                                CURRENT_EMULATOR_STATE.current_save_slot
-                            );
-                        }
+                    if state.current_save_slot != 255 {
+                        state.current_save_slot += 1;
+                        println!(
+                            "Current save slot increased to: {}",
+                            state.current_save_slot
+                        );
                     }
+
                     continue;
                 }
 
                 if &key_as_string == &config["input_state_slot_decrease"] {
-                    unsafe {
-                        if CURRENT_EMULATOR_STATE.current_save_slot != 0 {
-                            CURRENT_EMULATOR_STATE.current_save_slot -= 1;
-                            println!(
-                                "Current save slot decreased to: {}",
-                                CURRENT_EMULATOR_STATE.current_save_slot
-                            );
-                        }
+                    if state.current_save_slot != 0 {
+                        state.current_save_slot -= 1;
+                        println!(
+                            "Current save slot decreased to: {}",
+                            state.current_save_slot
+                        );
                     }
+
                     continue;
                 }
 
@@ -238,12 +245,10 @@ fn main() {
 
             audio::send_audio_to_thread(&sender);
 
-            match &CURRENT_EMULATOR_STATE.frame_buffer {
+            match &state.frame_buffer {
                 Some(buffer) => {
-                    let width = (CURRENT_EMULATOR_STATE.screen_pitch
-                        / CURRENT_EMULATOR_STATE.bytes_per_pixel as u32)
-                        as usize;
-                    let height = CURRENT_EMULATOR_STATE.screen_height as usize;
+                    let width = (state.screen_pitch / state.bytes_per_pixel as u32) as usize;
+                    let height = state.screen_height as usize;
                     let slice_of_pixel_buffer: &[u32] =
                         std::slice::from_raw_parts(buffer.as_ptr() as *const u32, buffer.len()); // convert to &[u32] slice reference
                     if slice_of_pixel_buffer.len() < width * height * 4 {
@@ -259,7 +264,7 @@ fn main() {
                     println!("We don't have a buffer to display");
                 }
             }
-            CURRENT_EMULATOR_STATE.buttons_pressed = Some(this_frames_pressed_buttons.clone());
+            state.buttons_pressed = Some(this_frames_pressed_buttons.clone());
         }
     }
 }
