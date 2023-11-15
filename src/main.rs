@@ -36,7 +36,7 @@ struct EmulatorState {
     #[arg(skip)]
     current_save_slot: u8,
     #[arg(skip)]
-    audio_data: Option<Vec<i16>>,
+    audio_data:  Option<Arc<Mutex<Vec<i16>>>>,
     #[arg(skip)]
     av_info: Option<SystemAvInfo>,
 }
@@ -69,12 +69,11 @@ fn parse_command_line_arguments() -> (String, String) {
 
 unsafe fn load_rom_file(core_api: &CoreAPI, rom_name: &String) -> bool {
     let rom_name_cptr = CString::new(rom_name.clone())
-        .expect("Failed to create CString")
-        .as_ptr();
+        .expect("Failed to create CString");
     let contents = fs::read(rom_name).expect("Failed to read file");
     let data: *const c_void = contents.as_ptr() as *const c_void;
     let game_info = GameInfo {
-        path: rom_name_cptr,
+        path: *rom_name_cptr,
         data,
         size: contents.len(),
         meta: ptr::null(),
@@ -106,7 +105,8 @@ fn main() {
     let core_api = &core.api;
 
     // Create a channel for passing audio samples from the main thread to the audio thread
-    let (sender, receiver) = channel();
+    let (sender, receiver) = channel::<Arc<Mutex<Vec<i16>>>>();
+
 
     // Extract the sample_rate before spawning the thread
     let sample_rate = {
@@ -117,16 +117,16 @@ fn main() {
             .map_or(0.0, |av_info| av_info.timing.sample_rate)
     };
 
-    // Spawn a new thread to play back audio
     let _audio_thread = thread::spawn(move || {
         println!("Audio Thread Started");
         let (_stream, stream_handle) = OutputStream::try_default().unwrap();
         let sink = Sink::try_new(&stream_handle).unwrap();
         loop {
             // Receive the next set of audio samples from the channel
-            let audio_samples = receiver.recv().unwrap();
+            let buffer_arc = receiver.recv().unwrap();
+            let buffer = buffer_arc.lock().unwrap();  // Lock the mutex to access the data
             unsafe {
-                audio::play_audio(&sink, audio_samples, sample_rate as u32);
+                audio::play_audio(&sink, &*buffer, sample_rate as u32);
             }
         }
     });
