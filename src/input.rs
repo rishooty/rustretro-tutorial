@@ -2,6 +2,23 @@ use crate::CURRENT_EMULATOR_STATE;
 use gilrs::Button;
 use std::collections::HashMap;
 
+pub const buttonArray: [Button; 14] = [
+    Button::South,
+    Button::North,
+    Button::East,
+    Button::West,
+    Button::Start,
+    Button::Select,
+    Button::DPadDown,
+    Button::DPadUp,
+    Button::DPadLeft,
+    Button::DPadRight,
+    Button::LeftTrigger,
+    Button::LeftTrigger2,
+    Button::RightTrigger,
+    Button::RightTrigger2,
+];
+
 pub fn key_device_map(config: &HashMap<String, String>) -> HashMap<&String, usize> {
     HashMap::from([
         (

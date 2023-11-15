@@ -3,7 +3,7 @@ mod input;
 mod libretro;
 mod video;
 use clap::Parser;
-use gilrs::{Button, Event, Gilrs};
+use gilrs::{Event, Gilrs};
 use libretro_sys::{CoreAPI, GameInfo, PixelFormat, SystemAvInfo};
 use minifb::{Key, KeyRepeat, Window, WindowOptions};
 use rodio::{OutputStream, Sink};
@@ -160,22 +160,7 @@ fn main() {
 
         // Now Lets check what buttons are pressed and map them to the libRetro buttons
         if let Some(gamepad) = active_gamepad.map(|id| gilrs.gamepad(id)) {
-            for button in [
-                Button::South,
-                Button::North,
-                Button::East,
-                Button::West,
-                Button::Start,
-                Button::Select,
-                Button::DPadDown,
-                Button::DPadUp,
-                Button::DPadLeft,
-                Button::DPadRight,
-                Button::LeftTrigger,
-                Button::LeftTrigger2,
-                Button::RightTrigger,
-                Button::RightTrigger2,
-            ] {
+            for button in input::buttonArray {
                 if gamepad.is_pressed(button) {
                     println!("Button Pressed: {:?}", button);
                     let libretro_button = joypad_device_map.get(&button).unwrap();
