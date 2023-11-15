@@ -1,9 +1,8 @@
 use once_cell::sync::Lazy;
 use rodio::buffer::SamplesBuffer;
 use rodio::Sink;
-use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
-use crate::EmulatorState;
+use crate::AUDIO_DATA_SENDER;
 
 const AUDIO_CHANNELS: usize = 2; // left and right
 const SAMPLE_RATE: u32 = 44_100; // 44.1 kHz
@@ -53,7 +52,7 @@ pub unsafe extern "C" fn libretro_set_audio_sample_batch_callback(
         buffer.extend_from_slice(audio_slice);
     }
 
-    CURRENT_STATE.audio_data = Some(buffer_arc.clone());
+    AUDIO_DATA_SENDER.send(buffer_arc.clone()).expect("Failed to send audio data");
 
     // Now it's safe to push the original buffer_arc back into the pool
     {
@@ -62,10 +61,4 @@ pub unsafe extern "C" fn libretro_set_audio_sample_batch_callback(
     }
 
     frames
-}
-
-pub fn send_audio_to_thread(sender: &Sender<Arc<Mutex<Vec<i16>>>>, state: &EmulatorState) {
-    if let Some(buffer_arc) = state.audio_data.clone() {
-        sender.send(buffer_arc).unwrap();
-    }
 }

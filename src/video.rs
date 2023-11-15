@@ -1,5 +1,5 @@
 use libretro_sys::PixelFormat;
-use std::{ptr, sync::atomic::Ordering};
+use std::sync::atomic::Ordering;
 
 use crate::{VIDEO_DATA_SENDER, VideoData, BYTES_PER_PIXEL};
 

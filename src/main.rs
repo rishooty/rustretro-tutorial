@@ -12,10 +12,16 @@ use std::ffi::{c_void, CString};
 use std::sync::mpsc::{self, channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::{fs, ptr, thread};
-
 use std::sync::atomic::{AtomicU8, Ordering};
 
+static BUTTONS_PRESSED: Mutex<(Vec<i16>, Vec<i16>)> = Mutex::new((vec![], vec![]));
+
 static BYTES_PER_PIXEL: AtomicU8 = AtomicU8::new(4); // Default value of 4
+
+static BUTTONS_PRESSED_SENDER: Lazy<Sender<Vec<i16>>> = Lazy::new(|| {
+    let (sender, _receiver) = mpsc::channel();
+    sender
+});
 
 static PIXEL_FORMAT_CHANNEL: Lazy<(Sender<PixelFormat>, Arc<Mutex<Receiver<PixelFormat>>>)> =
     Lazy::new(|| {
@@ -24,6 +30,11 @@ static PIXEL_FORMAT_CHANNEL: Lazy<(Sender<PixelFormat>, Arc<Mutex<Receiver<Pixel
     });
 
 static VIDEO_DATA_SENDER: Lazy<Sender<VideoData>> = Lazy::new(|| {
+    let (sender, _receiver) = mpsc::channel();
+    sender
+});
+
+static AUDIO_DATA_SENDER: Lazy<Sender<Arc<Mutex<Vec<i16>>>>> = Lazy::new(|| {
     let (sender, _receiver) = mpsc::channel();
     sender
 });
@@ -53,8 +64,6 @@ pub struct EmulatorState {
     buttons_pressed: Option<Vec<i16>>,
     #[arg(skip)]
     current_save_slot: u8,
-    #[arg(skip)]
-    audio_data: Option<Arc<Mutex<Vec<i16>>>>,
     #[arg(skip)]
     av_info: Option<SystemAvInfo>,
     #[arg(skip)]
@@ -106,7 +115,6 @@ fn main() {
         screen_height: 0,
         buttons_pressed: None,
         current_save_slot: 0,
-        audio_data: None,
         av_info: None,
         pixel_format: video::EmulatorPixelFormat(PixelFormat::ARGB8888),
         bytes_per_pixel: 4,
@@ -265,8 +273,6 @@ fn main() {
             }
         }
 
-        audio::send_audio_to_thread(&audio_sender, &current_state);
-
         unsafe {
             (core_api.retro_run)();
             let pixel_format_receiver = &PIXEL_FORMAT_CHANNEL.1.lock().unwrap();
@@ -310,7 +316,11 @@ fn main() {
                 }
             }
 
-            current_state.buttons_pressed = Some(this_frames_pressed_buttons);
+            {
+                let mut buttons = BUTTONS_PRESSED.lock().unwrap();
+                buttons.1 = this_frames_pressed_buttons; // Update the next frame vector
+                std::mem::swap(&mut buttons.0, &mut buttons.1); // Swap current and next frame vectors
+            }
         }
     }
 }
