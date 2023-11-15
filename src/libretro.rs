@@ -11,9 +11,6 @@ use std::{
 };
 const EXPECTED_LIB_RETRO_VERSION: u32 = 1;
 
-pub type EnvironmentCallback =
-    unsafe extern "C" fn(command: libc::c_uint, data: *mut libc::c_void) -> bool;
-
 unsafe extern "C" fn libretro_environment_callback(command: u32, return_data: *mut c_void) -> bool {
     let mut state = CURRENT_STATE.lock().unwrap();
 
@@ -57,7 +54,7 @@ unsafe extern "C" fn libretro_environment_callback(command: u32, return_data: *m
 }
 
 pub struct Core {
-    dylib: Library,
+    pub dylib: Library,
     pub api: CoreAPI,
 }
 

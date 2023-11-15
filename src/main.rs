@@ -67,23 +67,29 @@ fn parse_command_line_arguments() -> (String, String) {
     (emulator_state.rom_name, emulator_state.library_name)
 }
 
-unsafe fn load_rom_file(core_api: &CoreAPI, rom_name: &String) -> bool {
-    let rom_name_cptr = CString::new(rom_name.clone())
+pub unsafe fn load_rom_file(core_api: &CoreAPI, rom_name: &String) -> bool {
+    let cstr_rom_name = CString::new(rom_name.clone())
         .expect("Failed to create CString");
+    let rom_name_cptr = cstr_rom_name.as_ptr();
+
     let contents = fs::read(rom_name).expect("Failed to read file");
     let data: *const c_void = contents.as_ptr() as *const c_void;
+
     let game_info = GameInfo {
-        path: *rom_name_cptr,
+        path: rom_name_cptr,
         data,
         size: contents.len(),
         meta: ptr::null(),
     };
+
     let was_load_successful = (core_api.retro_load_game)(&game_info);
     if !was_load_successful {
         panic!("Rom Load was not successful");
     }
+
     return was_load_successful;
 }
+
 
 const WIDTH: usize = 256;
 const HEIGHT: usize = 140;
