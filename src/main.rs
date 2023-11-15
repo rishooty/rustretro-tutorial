@@ -13,11 +13,27 @@ use std::sync::mpsc::{self, channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::{fs, ptr, thread};
 
+use std::sync::atomic::{AtomicU8, Ordering};
+
+static BYTES_PER_PIXEL: AtomicU8 = AtomicU8::new(4); // Default value of 4
+
 static PIXEL_FORMAT_CHANNEL: Lazy<(Sender<PixelFormat>, Arc<Mutex<Receiver<PixelFormat>>>)> =
     Lazy::new(|| {
         let (sender, receiver) = mpsc::channel::<PixelFormat>();
         (sender, Arc::new(Mutex::new(receiver)))
     });
+
+static VIDEO_DATA_SENDER: Lazy<Sender<VideoData>> = Lazy::new(|| {
+    let (sender, _receiver) = mpsc::channel();
+    sender
+});
+
+struct VideoData {
+    frame_buffer: Vec<u32>,
+    width: u32,
+    height: u32,
+    pitch: u32,
+}
 
 #[derive(Parser)]
 pub struct EmulatorState {
@@ -79,6 +95,7 @@ const WIDTH: usize = 256;
 const HEIGHT: usize = 140;
 
 fn main() {
+    let (_video_data_sender, video_data_receiver) = mpsc::channel::<VideoData>();
     let (rom_name, library_name) = parse_command_line_arguments();
     let mut current_state = EmulatorState {
         rom_name,
@@ -256,27 +273,20 @@ fn main() {
 
             for pixel_format in pixel_format_receiver.try_iter() {
                 current_state.pixel_format.0 = pixel_format;
-                match pixel_format {
-                    PixelFormat::ARGB1555 => {
-                        println!(
-                            "Core will send us pixel data in the RETRO_PIXEL_FORMAT_0RGB1555 format"
-                        );
-                        current_state.bytes_per_pixel = 2;
-                    }
-                    PixelFormat::RGB565 => {
-                        println!(
-                            "Core will send us pixel data in the RETRO_PIXEL_FORMAT_RGB565 format"
-                        );
-                        current_state.bytes_per_pixel = 2;
-                    }
-                    PixelFormat::ARGB8888 => {
-                        println!(
-                            "Core will send us pixel data in the RETRO_PIXEL_FORMAT_XRGB8888 format"
-                        );
-                        current_state.bytes_per_pixel = 4;
-                    }
-                }
-                // Handle the pixel format update, e.g., updating bytes_per_pixel
+                let bpp = match pixel_format {
+                    PixelFormat::ARGB1555 | PixelFormat::RGB565 => 2,
+                    PixelFormat::ARGB8888 => 4,
+                };
+                println!("Core will send us pixel data in format {:?}", pixel_format);
+                BYTES_PER_PIXEL.store(bpp, Ordering::SeqCst);
+                current_state.bytes_per_pixel = bpp;
+            }
+
+            for video_data in video_data_receiver.try_iter() {
+                current_state.frame_buffer = Some(video_data.frame_buffer);
+                current_state.screen_height = video_data.height;
+                current_state.screen_width = video_data.width;
+                current_state.screen_pitch = video_data.pitch;
             }
 
             match &current_state.frame_buffer {

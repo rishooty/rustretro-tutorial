@@ -1,5 +1,7 @@
 use libretro_sys::PixelFormat;
-use std::ptr;
+use std::{ptr, sync::atomic::Ordering};
+
+use crate::{VIDEO_DATA_SENDER, VideoData, BYTES_PER_PIXEL};
 
 pub struct EmulatorPixelFormat(pub PixelFormat);
 
@@ -15,11 +17,12 @@ pub unsafe extern "C" fn libretro_set_video_refresh_callback(
     height: libc::c_uint,
     pitch: libc::size_t,
 ) {
-    if frame_buffer_data == ptr::null() {
+    if frame_buffer_data.is_null() {
         println!("frame_buffer_data was null");
         return;
     }
-    let length_of_frame_buffer = ((pitch as u32) * height) * CURRENT_STATE.bytes_per_pixel as u32;
+    let bpp = BYTES_PER_PIXEL.load(Ordering::SeqCst) as u32;
+    let length_of_frame_buffer = ((pitch as u32) * height) * bpp;
 
     let buffer_slice = std::slice::from_raw_parts(
         frame_buffer_data as *const u8,
@@ -27,16 +30,16 @@ pub unsafe extern "C" fn libretro_set_video_refresh_callback(
     );
     let result = convert_pixel_array_from_rgb565_to_xrgb8888(buffer_slice);
 
-    // Create a Vec<u8> from the slice
-    let buffer_vec = Vec::from(result);
+    let video_data = VideoData {
+        frame_buffer: Vec::from(result),
+        width: width as u32,
+        height: height as u32,
+        pitch: pitch as u32,
+    };
 
-    // Wrap the Vec<u8> in an Some Option and assign it to the frame_buffer field
-
-    CURRENT_STATE.frame_buffer = Some(buffer_vec);
-    CURRENT_STATE.screen_height = height;
-    CURRENT_STATE.screen_width = width;
-    CURRENT_STATE.screen_pitch = pitch as u32;
+    VIDEO_DATA_SENDER.send(video_data).expect("Failed to send video data");
 }
+
 
 fn convert_pixel_array_from_rgb565_to_xrgb8888(color_array: &[u8]) -> Box<[u32]> {
     let bytes_per_pixel = 2;

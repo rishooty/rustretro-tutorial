@@ -3,7 +3,6 @@ use rodio::buffer::SamplesBuffer;
 use rodio::Sink;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
-
 use crate::EmulatorState;
 
 const AUDIO_CHANNELS: usize = 2; // left and right
