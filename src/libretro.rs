@@ -61,7 +61,6 @@ impl Core {
     pub fn new() -> Self {
         unsafe {
             let dylib: Library;
-
             {
                 let state = CURRENT_STATE.lock().unwrap();
                 dylib = Library::new(&state.library_name).expect("Failed to load Core");
@@ -183,7 +182,12 @@ fn get_save_state_path(
     Some(save_state_path)
 }
 
-pub unsafe fn save_state(core_api: &CoreAPI, save_directory: &String) {
+pub unsafe fn save_state(
+    core_api: &CoreAPI,
+    save_directory: &String,
+    rom_name: &String,
+    save_index: &u8,
+) {
     let save_state_buffer_size = (core_api.retro_serialize_size)();
     let mut state_buffer: Vec<u8> = vec![0; save_state_buffer_size];
     // Call retro_serialize to create the save state
@@ -191,13 +195,9 @@ pub unsafe fn save_state(core_api: &CoreAPI, save_directory: &String) {
         state_buffer.as_mut_ptr() as *mut c_void,
         save_state_buffer_size,
     );
-    let file_path: PathBuf;
-    {
-        let state = CURRENT_STATE.lock().unwrap();
-        file_path =
-            get_save_state_path(save_directory, &state.rom_name, &state.current_save_slot).unwrap();
-        // hard coded save_slot to 0 for now
-    }
+
+    let file_path = get_save_state_path(save_directory, &rom_name, &save_index).unwrap();
+
     std::fs::write(&file_path, &state_buffer).unwrap();
     println!(
         "Save state saved to: {} with size: {}",
@@ -206,14 +206,14 @@ pub unsafe fn save_state(core_api: &CoreAPI, save_directory: &String) {
     );
 }
 
-pub unsafe fn load_state(core_api: &CoreAPI, save_directory: &String) {
-    let file_path: PathBuf;
-    {
-        let state = CURRENT_STATE.lock().unwrap();
-        file_path =
-            get_save_state_path(save_directory, &state.rom_name, &state.current_save_slot).unwrap();
-        // Hard coded the save_slot to 0 for now
-    }
+pub unsafe fn load_state(
+    core_api: &CoreAPI,
+    save_directory: &String,
+    rom_name: &String,
+    save_index: &u8,
+) {
+    let file_path = get_save_state_path(save_directory, &rom_name, &save_index).unwrap();
+
     let mut state_buffer = Vec::new();
     match File::open(&file_path) {
         Ok(mut file) => {

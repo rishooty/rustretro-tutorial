@@ -4,7 +4,7 @@ use rodio::Sink;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
-use crate::CURRENT_STATE;
+use crate::{EmulatorState, CURRENT_STATE};
 
 const AUDIO_CHANNELS: usize = 2; // left and right
 const SAMPLE_RATE: u32 = 44_100; // 44.1 kHz
@@ -39,10 +39,13 @@ pub unsafe extern "C" fn libretro_set_audio_sample_batch_callback(
     audio_data: *const i16,
     frames: libc::size_t,
 ) -> libc::size_t {
-    let mut pool = BUFFER_POOL.lock().unwrap();
-    let buffer_arc = pool
-        .pop()
-        .unwrap_or_else(|| Arc::new(Mutex::new(vec![0; BUFFER_LENGTH])));
+    let buffer_arc: Arc<Mutex<Vec<i16>>>;
+    {
+        let mut pool = BUFFER_POOL.lock().unwrap();
+        buffer_arc = pool
+            .pop()
+            .unwrap_or_else(|| Arc::new(Mutex::new(vec![0; BUFFER_LENGTH])));
+    }
 
     {
         let mut buffer = buffer_arc.lock().unwrap();
@@ -53,22 +56,19 @@ pub unsafe extern "C" fn libretro_set_audio_sample_batch_callback(
 
     {
         let mut state = CURRENT_STATE.lock().unwrap();
-        // Clone buffer_arc before assigning it
         state.audio_data = Some(buffer_arc.clone());
     }
     // Now it's safe to push the original buffer_arc back into the pool
-    pool.push(buffer_arc);
+    {
+        let mut pool = BUFFER_POOL.lock().unwrap();
+        pool.push(buffer_arc);
+    }
 
     frames
 }
 
-pub fn send_audio_to_thread(sender: &Sender<Arc<Mutex<Vec<i16>>>>) {
-    let buffer_arc_clone = {
-        let state = CURRENT_STATE.lock().unwrap();
-        state.audio_data.clone() // Clone the Arc itself, not the data
-    };
-
-    if let Some(buffer_arc) = buffer_arc_clone {
+pub fn send_audio_to_thread(sender: &Sender<Arc<Mutex<Vec<i16>>>>, state: &EmulatorState) {
+    if let Some(buffer_arc) = state.audio_data.clone() {
         sender.send(buffer_arc).unwrap();
     }
 }

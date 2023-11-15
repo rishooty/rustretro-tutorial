@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::{fs, ptr, thread};
 
 #[derive(Parser)]
-struct EmulatorState {
+pub struct EmulatorState {
     #[arg(help = "Sets the path to the ROM file to load", index = 1)]
     rom_name: String,
     #[arg(short = 'L', default_value = "default_library")]
@@ -165,115 +165,129 @@ fn main() {
     let mut active_gamepad = None;
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        // Gamepad input Handling
-        // Examine new events to check which gamepad is currently being used
-        while let Some(Event { id, .. }) = gilrs.next_event() {
-            // println!("{:?} New event from {}: {:?}", time, id, event);
-            active_gamepad = Some(id);
-        }
+        {
+            let mut state = CURRENT_STATE.lock().unwrap();
 
-        // Now Lets check what buttons are pressed and map them to the libRetro buttons
-        if let Some(gamepad) = active_gamepad.map(|id| gilrs.gamepad(id)) {
-            for button in input::BUTTON_ARRAY {
-                if gamepad.is_pressed(button) {
-                    println!("Button Pressed: {:?}", button);
-                    let libretro_button = joypad_device_map.get(&button).unwrap();
-                    this_frames_pressed_buttons[*libretro_button] = 1;
+            // Gamepad input Handling
+            // Examine new events to check which gamepad is currently being used
+            while let Some(Event { id, .. }) = gilrs.next_event() {
+                // println!("{:?} New event from {}: {:?}", time, id, event);
+                active_gamepad = Some(id);
+            }
+
+            // Now Lets check what buttons are pressed and map them to the libRetro buttons
+            if let Some(gamepad) = active_gamepad.map(|id| gilrs.gamepad(id)) {
+                for button in input::BUTTON_ARRAY {
+                    if gamepad.is_pressed(button) {
+                        println!("Button Pressed: {:?}", button);
+                        let libretro_button = joypad_device_map.get(&button).unwrap();
+                        this_frames_pressed_buttons[*libretro_button] = 1;
+                    }
                 }
             }
-        }
 
-        let mini_fb_keys_pressed = window.get_keys_pressed(KeyRepeat::No);
-        if !mini_fb_keys_pressed.is_empty() {
-            for key in mini_fb_keys_pressed {
+            let mini_fb_keys_pressed = window.get_keys_pressed(KeyRepeat::No);
+            if !mini_fb_keys_pressed.is_empty() {
+                for key in mini_fb_keys_pressed {
+                    let key_as_string = format!("{:?}", key).to_ascii_lowercase();
+
+                    if let Some(device_id) = key_device_map.get(&key_as_string) {
+                        this_frames_pressed_buttons[*device_id] = 1;
+                    }
+                    if &key_as_string == &config["input_save_state"] {
+                        unsafe {
+                            libretro::save_state(
+                                &core_api,
+                                &config["savestate_directory"],
+                                &state.rom_name,
+                                &state.current_save_slot,
+                            );
+                        } // f2
+                        continue;
+                    }
+                    if &key_as_string == &config["input_load_state"] {
+                        unsafe {
+                            libretro::load_state(
+                                &core_api,
+                                &config["savestate_directory"],
+                                &state.rom_name,
+                                &state.current_save_slot,
+                            );
+                        } // f4
+                        continue;
+                    }
+                    if &key_as_string == &config["input_state_slot_increase"] {
+                        if state.current_save_slot != 255 {
+                            state.current_save_slot += 1;
+                            println!(
+                                "Current save slot increased to: {}",
+                                state.current_save_slot
+                            );
+                        }
+
+                        continue;
+                    }
+
+                    if &key_as_string == &config["input_state_slot_decrease"] {
+                        if state.current_save_slot != 0 {
+                            state.current_save_slot -= 1;
+                            println!(
+                                "Current save slot decreased to: {}",
+                                state.current_save_slot
+                            );
+                        }
+
+                        continue;
+                    }
+
+                    println!("Unhandled Key Pressed: {} ", key_as_string);
+                }
+            }
+
+            let mini_fb_keys_released = window.get_keys_released();
+            for key in &mini_fb_keys_released {
                 let key_as_string = format!("{:?}", key).to_ascii_lowercase();
 
                 if let Some(device_id) = key_device_map.get(&key_as_string) {
-                    this_frames_pressed_buttons[*device_id] = 1;
+                    this_frames_pressed_buttons[*device_id] = 0;
+                } else {
+                    println!(
+                        "Unhandled Key Pressed: {} input_player1_a: {}",
+                        key_as_string, config["input_player1_a"]
+                    );
                 }
-                if &key_as_string == &config["input_save_state"] {
-                    unsafe {
-                        libretro::save_state(&core_api, &config["savestate_directory"]);
-                    } // f2
-                    continue;
-                }
-                if &key_as_string == &config["input_load_state"] {
-                    unsafe {
-                        libretro::load_state(&core_api, &config["savestate_directory"]);
-                    } // f4
-                    continue;
-                }
-                if &key_as_string == &config["input_state_slot_increase"] {
-                    let mut state = CURRENT_STATE.lock().unwrap();
-                    if state.current_save_slot != 255 {
-                        state.current_save_slot += 1;
-                        println!(
-                            "Current save slot increased to: {}",
-                            state.current_save_slot
-                        );
-                    }
-
-                    continue;
-                }
-
-                if &key_as_string == &config["input_state_slot_decrease"] {
-                    let mut state = CURRENT_STATE.lock().unwrap();
-                    if state.current_save_slot != 0 {
-                        state.current_save_slot -= 1;
-                        println!(
-                            "Current save slot decreased to: {}",
-                            state.current_save_slot
-                        );
-                    }
-
-                    continue;
-                }
-
-                println!("Unhandled Key Pressed: {} ", key_as_string);
             }
+
+            audio::send_audio_to_thread(&sender, &state);
         }
-
-        let mini_fb_keys_released = window.get_keys_released();
-        for key in &mini_fb_keys_released {
-            let key_as_string = format!("{:?}", key).to_ascii_lowercase();
-
-            if let Some(device_id) = key_device_map.get(&key_as_string) {
-                this_frames_pressed_buttons[*device_id] = 0;
-            } else {
-                println!(
-                    "Unhandled Key Pressed: {} input_player1_a: {}",
-                    key_as_string, config["input_player1_a"]
-                );
-            }
-        }
-
-        audio::send_audio_to_thread(&sender);
 
         unsafe {
             (core_api.retro_run)();
-
-            let mut state = CURRENT_STATE.lock().unwrap();
-            match &state.frame_buffer {
-                Some(buffer) => {
-                    let width = (state.screen_pitch / state.bytes_per_pixel as u32) as usize;
-                    let height = state.screen_height as usize;
-                    let slice_of_pixel_buffer: &[u32] =
-                        std::slice::from_raw_parts(buffer.as_ptr() as *const u32, buffer.len()); // convert to &[u32] slice reference
-                    if slice_of_pixel_buffer.len() < width * height * 4 {
-                        // The frame buffer isn't big enough so lets add additional pixels just so we can display it
-                        let mut vec: Vec<u32> = slice_of_pixel_buffer.to_vec();
-                        vec.resize((width * height * 4) as usize, 0x0000FFFF); // Add any missing pixels with colour blue
-                        window.update_with_buffer(&vec, width, height).unwrap();
-                    } else {
-                        let _ = window.update_with_buffer(&slice_of_pixel_buffer, width, height);
+            {
+                let mut state = CURRENT_STATE.lock().unwrap();
+                match &state.frame_buffer {
+                    Some(buffer) => {
+                        let width = (state.screen_pitch / state.bytes_per_pixel as u32) as usize;
+                        let height = state.screen_height as usize;
+                        let slice_of_pixel_buffer: &[u32] =
+                            std::slice::from_raw_parts(buffer.as_ptr() as *const u32, buffer.len()); // convert to &[u32] slice reference
+                        if slice_of_pixel_buffer.len() < width * height * 4 {
+                            // The frame buffer isn't big enough so lets add additional pixels just so we can display it
+                            let mut vec: Vec<u32> = slice_of_pixel_buffer.to_vec();
+                            vec.resize((width * height * 4) as usize, 0x0000FFFF); // Add any missing pixels with colour blue
+                            window.update_with_buffer(&vec, width, height).unwrap();
+                        } else {
+                            let _ =
+                                window.update_with_buffer(&slice_of_pixel_buffer, width, height);
+                        }
+                    }
+                    None => {
+                        println!("We don't have a buffer to display");
                     }
                 }
-                None => {
-                    println!("We don't have a buffer to display");
-                }
-            }
 
-            state.buttons_pressed = Some(this_frames_pressed_buttons.clone());
+                state.buttons_pressed = Some(this_frames_pressed_buttons.clone());
+            }
         }
     }
 }
