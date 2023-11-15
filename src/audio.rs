@@ -4,7 +4,7 @@ use rodio::Sink;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
-use crate::{EmulatorState, CURRENT_STATE};
+use crate::EmulatorState;
 
 const AUDIO_CHANNELS: usize = 2; // left and right
 const SAMPLE_RATE: u32 = 44_100; // 44.1 kHz
@@ -54,10 +54,8 @@ pub unsafe extern "C" fn libretro_set_audio_sample_batch_callback(
         buffer.extend_from_slice(audio_slice);
     }
 
-    {
-        let mut state = CURRENT_STATE.lock().unwrap();
-        state.audio_data = Some(buffer_arc.clone());
-    }
+    CURRENT_STATE.audio_data = Some(buffer_arc.clone());
+
     // Now it's safe to push the original buffer_arc back into the pool
     {
         let mut pool = BUFFER_POOL.lock().unwrap();

@@ -1,7 +1,5 @@
-use std::ptr;
 use libretro_sys::PixelFormat;
-
-use crate::{CURRENT_STATE, BYTES_PER_PIXEL};
+use std::ptr;
 
 pub struct EmulatorPixelFormat(pub PixelFormat);
 
@@ -21,11 +19,7 @@ pub unsafe extern "C" fn libretro_set_video_refresh_callback(
         println!("frame_buffer_data was null");
         return;
     }
-    let length_of_frame_buffer: u32;
-    {
-        let state = CURRENT_STATE.lock().unwrap();
-        length_of_frame_buffer = ((pitch as u32) * height) * BYTES_PER_PIXEL as u32;
-    }
+    let length_of_frame_buffer = ((pitch as u32) * height) * CURRENT_STATE.bytes_per_pixel as u32;
 
     let buffer_slice = std::slice::from_raw_parts(
         frame_buffer_data as *const u8,
@@ -37,13 +31,11 @@ pub unsafe extern "C" fn libretro_set_video_refresh_callback(
     let buffer_vec = Vec::from(result);
 
     // Wrap the Vec<u8> in an Some Option and assign it to the frame_buffer field
-    {
-        let mut state = CURRENT_STATE.lock().unwrap();
-        state.frame_buffer = Some(buffer_vec);
-        state.screen_height = height;
-        state.screen_width = width;
-        state.screen_pitch = pitch as u32;
-    }
+
+    CURRENT_STATE.frame_buffer = Some(buffer_vec);
+    CURRENT_STATE.screen_height = height;
+    CURRENT_STATE.screen_width = width;
+    CURRENT_STATE.screen_pitch = pitch as u32;
 }
 
 fn convert_pixel_array_from_rgb565_to_xrgb8888(color_array: &[u8]) -> Box<[u32]> {

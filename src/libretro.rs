@@ -1,4 +1,4 @@
-use crate::{CURRENT_STATE, PIXEL_FORMAT_CHANNEL};
+use crate::{EmulatorState, PIXEL_FORMAT_CHANNEL};
 use libc::c_void;
 use libloading::Library;
 use libretro_sys::{CoreAPI, GameGeometry, PixelFormat, SystemAvInfo, SystemTiming};
@@ -20,8 +20,9 @@ unsafe extern "C" fn libretro_environment_callback(command: u32, return_data: *m
         libretro_sys::ENVIRONMENT_SET_PIXEL_FORMAT => {
             let pixel_format = *(return_data as *const u32);
             let sender = &PIXEL_FORMAT_CHANNEL.0; // Use the global sender
-            sender.send(PixelFormat::from_uint(pixel_format).unwrap())
-                  .expect("Failed to send pixel format");
+            sender
+                .send(PixelFormat::from_uint(pixel_format).unwrap())
+                .expect("Failed to send pixel format");
             return true;
         }
         _ => println!(
@@ -38,13 +39,9 @@ pub struct Core {
 }
 
 impl Core {
-    pub fn new() -> Self {
+    pub fn new(mut state: EmulatorState) -> (Self, EmulatorState) {
         unsafe {
-            let dylib: Library;
-            {
-                let state = CURRENT_STATE.lock().unwrap();
-                dylib = Library::new(&state.library_name).expect("Failed to load Core");
-            }
+            let dylib = Library::new(&state.library_name).expect("Failed to load Core");
 
             let core_api = CoreAPI {
                 retro_set_environment: *(dylib.get(b"retro_set_environment").unwrap()),
@@ -108,16 +105,16 @@ impl Core {
             };
             (core_api.retro_get_system_av_info)(&mut av_info);
             println!("AV Info: {:?}", &av_info);
-            {
-                let mut state = CURRENT_STATE.lock().unwrap();
-                state.av_info = Some(av_info);
-            }
+            state.av_info = Some(av_info);
 
             // Construct and return a Core instance
-            Core {
-                dylib,
-                api: core_api,
-            }
+            (
+                Core {
+                    dylib,
+                    api: core_api,
+                },
+                state,
+            )
         }
     }
 }
