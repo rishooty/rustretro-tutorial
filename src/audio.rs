@@ -54,14 +54,10 @@ static BUFFER_POOL: Lazy<Mutex<Vec<Arc<Mutex<Vec<i16>>>>>> = Lazy::new(|| {
 });
 
 pub unsafe fn play_audio(sink: &Sink, audio_samples: &AudioBuffer, sample_rate: u32) {
-    if sink.empty() {
-        let audio_slice =
-            std::slice::from_raw_parts(audio_samples.as_ptr() as *const i16, audio_samples.len());
-        let source = SamplesBuffer::new(2, sample_rate, audio_slice);
-        sink.append(source);
-        sink.play();
-        sink.sleep_until_end();
-    }
+    let audio_slice =
+        std::slice::from_raw_parts(audio_samples.as_ptr() as *const i16, audio_samples.len());
+    let source = SamplesBuffer::new(2, sample_rate, audio_slice);
+    sink.append(source);
 }
 
 pub unsafe extern "C" fn libretro_set_audio_sample_callback(left: i16, right: i16) {
