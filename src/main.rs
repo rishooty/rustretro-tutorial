@@ -57,8 +57,6 @@ pub struct EmulatorState {
     #[arg(skip)]
     screen_height: u32,
     #[arg(skip)]
-    buttons_pressed: Option<Vec<i16>>,
-    #[arg(skip)]
     current_save_slot: u8,
     #[arg(skip)]
     av_info: Option<SystemAvInfo>,
@@ -108,7 +106,6 @@ fn main() {
         screen_pitch: 0,
         screen_width: 0,
         screen_height: 0,
-        buttons_pressed: None,
         current_save_slot: 0,
         av_info: None,
         pixel_format: video::EmulatorPixelFormat(PixelFormat::ARGB8888),
@@ -312,15 +309,7 @@ fn main() {
 
             {
                 let mut buttons = BUTTONS_PRESSED.lock().unwrap();
-
-                // Temporarily replace `buttons.1` with an empty Vec
-                let mut temp = std::mem::take(&mut buttons.1);
-
-                // Swap the values
-                std::mem::swap(&mut buttons.0, &mut temp);
-
-                // Put the original `buttons.1` back
-                buttons.1 = temp;
+                buttons.0 = this_frames_pressed_buttons.clone(); // Update the current frame's inputs
             }
         }
     }
