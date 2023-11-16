@@ -5,10 +5,10 @@ use std::sync::{Arc, Mutex};
 use crate::AUDIO_DATA_CHANNEL;
 
 const AUDIO_CHANNELS: usize = 2; // left and right
-const SAMPLE_RATE: u32 = 44_100; // 44.1 kHz
-const BUFFER_DURATION_MS: u32 = 16; // Roughly 1/60th of a second
-const BUFFER_LENGTH: usize = (SAMPLE_RATE as u32 * BUFFER_DURATION_MS / 1000) as usize; // Number of samples per buffer
-const POOL_SIZE: usize = 10; // Number of buffers in the pool
+const SAMPLE_RATE: u32 = 48_000; // 48 kHz
+const BUFFER_DURATION_MS: u32 = 64; // Roughly 1/64 of a second
+const BUFFER_LENGTH: usize = (SAMPLE_RATE as u32 * BUFFER_DURATION_MS / 1000) as usize;
+const POOL_SIZE: usize = 20; // Number of buffers in the pool
 
 pub struct AudioBuffer {
     data: Vec<i16>,
