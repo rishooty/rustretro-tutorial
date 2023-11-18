@@ -109,7 +109,7 @@ fn main() {
         current_save_slot: 0,
         av_info: None,
         pixel_format: video::EmulatorPixelFormat(PixelFormat::ARGB8888),
-        bytes_per_pixel: 4,
+        bytes_per_pixel: 0,
     };
 
     let mut window = Window::new("Rust Game", WIDTH, HEIGHT, WindowOptions::default())
@@ -265,20 +265,23 @@ fn main() {
 
         unsafe {
             (core_api.retro_run)();
-            let pixel_format_receiver = &PIXEL_FORMAT_CHANNEL.1.lock().unwrap();
-            let video_data_receiver = VIDEO_DATA_CHANNEL.1.lock().unwrap();
+            
+            if current_state.bytes_per_pixel == 0 {
+                let pixel_format_receiver = &PIXEL_FORMAT_CHANNEL.1.lock().unwrap();
 
-            for pixel_format in pixel_format_receiver.try_iter() {
-                current_state.pixel_format.0 = pixel_format;
-                let bpp = match pixel_format {
-                    PixelFormat::ARGB1555 | PixelFormat::RGB565 => 2,
-                    PixelFormat::ARGB8888 => 4,
-                };
-                println!("Core will send us pixel data in format {:?}", pixel_format);
-                BYTES_PER_PIXEL.store(bpp, Ordering::SeqCst);
-                current_state.bytes_per_pixel = bpp;
+                for pixel_format in pixel_format_receiver.try_iter() {
+                    current_state.pixel_format.0 = pixel_format;
+                    let bpp = match pixel_format {
+                        PixelFormat::ARGB1555 | PixelFormat::RGB565 => 2,
+                        PixelFormat::ARGB8888 => 4,
+                    };
+                    println!("Core will send us pixel data in format {:?}", pixel_format);
+                    BYTES_PER_PIXEL.store(bpp, Ordering::SeqCst);
+                    current_state.bytes_per_pixel = bpp;
+                }
             }
 
+            let video_data_receiver = VIDEO_DATA_CHANNEL.1.lock().unwrap();
             for video_data in video_data_receiver.try_iter() {
                 current_state.frame_buffer = Some(video_data.frame_buffer);
                 current_state.screen_height = video_data.height;
