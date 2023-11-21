@@ -1,7 +1,13 @@
-use crate::{EmulatorState, PIXEL_FORMAT_CHANNEL};
+use crate::PIXEL_FORMAT_CHANNEL;
+use crate::video;
+use clap::Parser;
 use libc::c_void;
 use libloading::Library;
+use libretro_sys::GameInfo;
 use libretro_sys::{CoreAPI, GameGeometry, PixelFormat, SystemAvInfo, SystemTiming};
+use std::ffi::CString;
+use std::fs;
+use std::ptr;
 use std::{
     collections::HashMap,
     env,
@@ -10,6 +16,58 @@ use std::{
     path::{Path, PathBuf},
 };
 const EXPECTED_LIB_RETRO_VERSION: u32 = 1;
+
+#[derive(Parser)]
+pub struct EmulatorState {
+    #[arg(help = "Sets the path to the ROM file to load", index = 1)]
+    pub rom_name: String,
+    #[arg(short = 'L', default_value = "default_library")]
+    pub library_name: String,
+    #[arg(skip)]
+    pub frame_buffer: Option<Vec<u32>>,
+    #[arg(skip)]
+    pub screen_pitch: u32,
+    #[arg(skip)]
+    pub screen_width: u32,
+    #[arg(skip)]
+    pub screen_height: u32,
+    #[arg(skip)]
+    pub current_save_slot: u8,
+    #[arg(skip)]
+    pub av_info: Option<SystemAvInfo>,
+    #[arg(skip)]
+    pub pixel_format: video::EmulatorPixelFormat,
+    #[arg(skip)]
+    pub bytes_per_pixel: u8,
+}
+
+pub fn parse_command_line_arguments() -> (String, String) {
+    let emulator_state = EmulatorState::parse();
+
+    println!("ROM name: {}", emulator_state.rom_name);
+    println!("Core Library name: {}", emulator_state.library_name);
+
+    (emulator_state.rom_name, emulator_state.library_name)
+}
+
+pub unsafe fn load_rom_file(core_api: &CoreAPI, rom_name: &String) -> bool {
+    let cstr_rom_name = CString::new(rom_name.clone()).expect("Failed to create CString");
+    let contents = fs::read(rom_name).expect("Failed to read file");
+    let data: *const c_void = contents.as_ptr() as *const c_void;
+
+    let game_info = GameInfo {
+        path: cstr_rom_name.as_ptr(),
+        data,
+        size: contents.len(),
+        meta: ptr::null(),
+    };
+
+    let was_load_successful = (core_api.retro_load_game)(&game_info);
+    if !was_load_successful {
+        panic!("Rom Load was not successful");
+    }
+    return was_load_successful;
+}
 
 unsafe extern "C" fn libretro_environment_callback(command: u32, return_data: *mut c_void) -> bool {
     match command {

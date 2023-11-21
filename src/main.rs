@@ -3,17 +3,15 @@ mod input;
 mod libretro;
 mod video;
 use audio::AudioBuffer;
-use clap::Parser;
 use gilrs::{Event, Gilrs};
-use libretro_sys::{CoreAPI, GameInfo, PixelFormat, SystemAvInfo};
+use libretro_sys::PixelFormat;
 use minifb::{Key, KeyRepeat, Window, WindowOptions};
 use once_cell::sync::Lazy;
 use rodio::{OutputStream, Sink};
-use std::ffi::{c_void, CString};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::{fs, ptr, thread};
+use std::thread;
 
 static BUTTONS_PRESSED: Mutex<(Vec<i16>, Vec<i16>)> = Mutex::new((vec![], vec![]));
 
@@ -42,64 +40,12 @@ struct VideoData {
     pitch: u32,
 }
 
-#[derive(Parser)]
-pub struct EmulatorState {
-    #[arg(help = "Sets the path to the ROM file to load", index = 1)]
-    rom_name: String,
-    #[arg(short = 'L', default_value = "default_library")]
-    library_name: String,
-    #[arg(skip)]
-    frame_buffer: Option<Vec<u32>>,
-    #[arg(skip)]
-    screen_pitch: u32,
-    #[arg(skip)]
-    screen_width: u32,
-    #[arg(skip)]
-    screen_height: u32,
-    #[arg(skip)]
-    current_save_slot: u8,
-    #[arg(skip)]
-    av_info: Option<SystemAvInfo>,
-    #[arg(skip)]
-    pixel_format: video::EmulatorPixelFormat,
-    #[arg(skip)]
-    bytes_per_pixel: u8,
-}
-
-fn parse_command_line_arguments() -> (String, String) {
-    let emulator_state = EmulatorState::parse();
-
-    println!("ROM name: {}", emulator_state.rom_name);
-    println!("Core Library name: {}", emulator_state.library_name);
-
-    (emulator_state.rom_name, emulator_state.library_name)
-}
-
-pub unsafe fn load_rom_file(core_api: &CoreAPI, rom_name: &String) -> bool {
-    let cstr_rom_name = CString::new(rom_name.clone()).expect("Failed to create CString");
-    let contents = fs::read(rom_name).expect("Failed to read file");
-    let data: *const c_void = contents.as_ptr() as *const c_void;
-
-    let game_info = GameInfo {
-        path: cstr_rom_name.as_ptr(),
-        data,
-        size: contents.len(),
-        meta: ptr::null(),
-    };
-
-    let was_load_successful = (core_api.retro_load_game)(&game_info);
-    if !was_load_successful {
-        panic!("Rom Load was not successful");
-    }
-    return was_load_successful;
-}
-
 const WIDTH: usize = 256;
 const HEIGHT: usize = 140;
 
 fn main() {
-    let (rom_name, library_name) = parse_command_line_arguments();
-    let mut current_state = EmulatorState {
+    let (rom_name, library_name) = libretro::parse_command_line_arguments();
+    let mut current_state = libretro::EmulatorState {
         rom_name,
         library_name,
         frame_buffer: None,
@@ -152,7 +98,7 @@ fn main() {
         (core_api.retro_set_audio_sample)(audio::libretro_set_audio_sample_callback);
         (core_api.retro_set_audio_sample_batch)(audio::libretro_set_audio_sample_batch_callback);
         println!("About to load ROM: {}", &current_state.rom_name);
-        load_rom_file(core_api, &current_state.rom_name);
+        libretro::load_rom_file(core_api, &current_state.rom_name);
     }
 
     let mut this_frames_pressed_buttons = vec![0; 16];
