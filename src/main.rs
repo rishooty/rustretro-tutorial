@@ -5,7 +5,7 @@ mod video;
 use audio::AudioBuffer;
 use gilrs::{Event, Gilrs};
 use libretro_sys::PixelFormat;
-use minifb::{Key, KeyRepeat, Window, WindowOptions};
+use minifb::{Key, Window, WindowOptions};
 use once_cell::sync::Lazy;
 use rodio::{OutputStream, Sink};
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -23,12 +23,16 @@ static PIXEL_FORMAT_CHANNEL: Lazy<(Sender<PixelFormat>, Arc<Mutex<Receiver<Pixel
         (sender, Arc::new(Mutex::new(receiver)))
     });
 
-static VIDEO_DATA_CHANNEL: Lazy<(Sender<VideoData>, Arc<Mutex<Receiver<VideoData>>>)> = Lazy::new(|| {
-    let (sender, receiver) = channel::<VideoData>();
-    (sender, Arc::new(Mutex::new(receiver)))
-});
+static VIDEO_DATA_CHANNEL: Lazy<(Sender<VideoData>, Arc<Mutex<Receiver<VideoData>>>)> =
+    Lazy::new(|| {
+        let (sender, receiver) = channel::<VideoData>();
+        (sender, Arc::new(Mutex::new(receiver)))
+    });
 
-static AUDIO_DATA_CHANNEL: Lazy<(Sender<Arc<Mutex<AudioBuffer>>>, Arc<Mutex<Receiver<Arc<Mutex<AudioBuffer>>>>>)> = Lazy::new(|| {
+static AUDIO_DATA_CHANNEL: Lazy<(
+    Sender<Arc<Mutex<AudioBuffer>>>,
+    Arc<Mutex<Receiver<Arc<Mutex<AudioBuffer>>>>>,
+)> = Lazy::new(|| {
     let (sender, receiver) = channel::<Arc<Mutex<AudioBuffer>>>();
     (sender, Arc::new(Mutex::new(receiver)))
 });
@@ -90,6 +94,7 @@ fn main() {
         }
     });
 
+    // Set up libretro callbacks
     unsafe {
         (core_api.retro_init)();
         (core_api.retro_set_video_refresh)(video::libretro_set_video_refresh_callback);
@@ -101,117 +106,45 @@ fn main() {
         libretro::load_rom_file(core_api, &current_state.rom_name);
     }
 
+    // Prepare inputs/controllers
     let mut this_frames_pressed_buttons = vec![0; 16];
-
     let config = libretro::setup_config().unwrap();
-
     let key_device_map = input::key_device_map(&config);
-
     let joypad_device_map = input::setup_joypad_device_map();
-
     let mut gilrs = Gilrs::new().unwrap();
-
-    // Iterate over all connected gamepads
-    for (_id, gamepad) in gilrs.gamepads() {
-        println!("{} is {:?}", gamepad.name(), gamepad.power_info());
-    }
-
     let mut active_gamepad = None;
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        // Gamepad input Handling
-        // Examine new events to check which gamepad is currently being used
+        // Handle gamepad input
         while let Some(Event { id, .. }) = gilrs.next_event() {
-            // println!("{:?} New event from {}: {:?}", time, id, event);
             active_gamepad = Some(id);
         }
 
-        // Now Lets check what buttons are pressed and map them to the libRetro buttons
-        if let Some(gamepad) = active_gamepad.map(|id| gilrs.gamepad(id)) {
-            for button in input::BUTTON_ARRAY {
-                if gamepad.is_pressed(button) {
-                    println!("Button Pressed: {:?}", button);
-                    let libretro_button = joypad_device_map.get(&button).unwrap();
-                    this_frames_pressed_buttons[*libretro_button] = 1;
-                }
-            }
-        }
-
-        let mini_fb_keys_pressed = window.get_keys_pressed(KeyRepeat::No);
-        if !mini_fb_keys_pressed.is_empty() {
-            for key in mini_fb_keys_pressed {
-                let key_as_string = format!("{:?}", key).to_ascii_lowercase();
-
-                if let Some(device_id) = key_device_map.get(&key_as_string) {
-                    this_frames_pressed_buttons[*device_id] = 1;
-                }
-                if &key_as_string == &config["input_save_state"] {
-                    unsafe {
-                        libretro::save_state(
-                            &core_api,
-                            &config["savestate_directory"],
-                            &current_state.rom_name,
-                            &current_state.current_save_slot,
-                        );
-                    } // f2
-                    continue;
-                }
-                if &key_as_string == &config["input_load_state"] {
-                    unsafe {
-                        libretro::load_state(
-                            &core_api,
-                            &config["savestate_directory"],
-                            &current_state.rom_name,
-                            &current_state.current_save_slot,
-                        );
-                    } // f4
-                    continue;
-                }
-                if &key_as_string == &config["input_state_slot_increase"] {
-                    if current_state.current_save_slot != 255 {
-                        current_state.current_save_slot += 1;
-                        println!(
-                            "Current save slot increased to: {}",
-                            current_state.current_save_slot
-                        );
-                    }
-
-                    continue;
-                }
-
-                if &key_as_string == &config["input_state_slot_decrease"] {
-                    if current_state.current_save_slot != 0 {
-                        current_state.current_save_slot -= 1;
-                        println!(
-                            "Current save slot decreased to: {}",
-                            current_state.current_save_slot
-                        );
-                    }
-
-                    continue;
-                }
-
-                println!("Unhandled Key Pressed: {} ", key_as_string);
-            }
-        }
-
-        let mini_fb_keys_released = window.get_keys_released();
-        for key in &mini_fb_keys_released {
-            let key_as_string = format!("{:?}", key).to_ascii_lowercase();
-
-            if let Some(device_id) = key_device_map.get(&key_as_string) {
-                this_frames_pressed_buttons[*device_id] = 0;
-            } else {
-                println!(
-                    "Unhandled Key Pressed: {} input_player1_a: {}",
-                    key_as_string, config["input_player1_a"]
-                );
-            }
+        if !active_gamepad.is_none() {
+            let game_pad_input = input::handle_gamepad_input(
+                &joypad_device_map,
+                &gilrs,
+                &active_gamepad,
+                this_frames_pressed_buttons,
+            );
+            this_frames_pressed_buttons = game_pad_input;
+        } else {
+            // Handle keyboard input
+            let keyboard_input = input::handle_keyboard_input(
+                core_api,
+                &window,
+                current_state,
+                this_frames_pressed_buttons,
+                &key_device_map,
+                &config,
+            );
+            current_state = keyboard_input.0;
+            this_frames_pressed_buttons = keyboard_input.1;
         }
 
         unsafe {
             (core_api.retro_run)();
-            
+
             if current_state.bytes_per_pixel == 0 {
                 let pixel_format_receiver = &PIXEL_FORMAT_CHANNEL.1.lock().unwrap();
 
