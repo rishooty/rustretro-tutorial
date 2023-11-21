@@ -1,10 +1,10 @@
-use gilrs::{Button, Event, GamepadId, Gilrs};
+use gilrs::{Button, GamepadId, Gilrs};
 use libretro_sys::CoreAPI;
 use minifb::{KeyRepeat, Window};
 use std::collections::{hash_map::RandomState, HashMap};
 
 use crate::{
-    libretro::{self, Core, EmulatorState},
+    libretro::{EmulatorState, self},
     BUTTONS_PRESSED,
 };
 

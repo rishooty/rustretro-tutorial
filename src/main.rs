@@ -8,10 +8,13 @@ use libretro_sys::PixelFormat;
 use minifb::{Key, Window, WindowOptions};
 use once_cell::sync::Lazy;
 use rodio::{OutputStream, Sink};
+use video::set_up_pixel_format;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
+
+use crate::video::render_frame;
 
 static BUTTONS_PRESSED: Mutex<(Vec<i16>, Vec<i16>)> = Mutex::new((vec![], vec![]));
 
@@ -115,7 +118,7 @@ fn main() {
     let mut active_gamepad = None;
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        // Handle gamepad input
+        // Handle Input
         while let Some(Event { id, .. }) = gilrs.next_event() {
             active_gamepad = Some(id);
         }
@@ -129,7 +132,6 @@ fn main() {
             );
             this_frames_pressed_buttons = game_pad_input;
         } else {
-            // Handle keyboard input
             let keyboard_input = input::handle_keyboard_input(
                 core_api,
                 &window,
@@ -144,54 +146,20 @@ fn main() {
 
         unsafe {
             (core_api.retro_run)();
-
+            // One time setup after core init
             if current_state.bytes_per_pixel == 0 {
-                let pixel_format_receiver = &PIXEL_FORMAT_CHANNEL.1.lock().unwrap();
-
-                for pixel_format in pixel_format_receiver.try_iter() {
-                    current_state.pixel_format.0 = pixel_format;
-                    let bpp = match pixel_format {
-                        PixelFormat::ARGB1555 | PixelFormat::RGB565 => 2,
-                        PixelFormat::ARGB8888 => 4,
-                    };
-                    println!("Core will send us pixel data in format {:?}", pixel_format);
-                    BYTES_PER_PIXEL.store(bpp, Ordering::SeqCst);
-                    current_state.bytes_per_pixel = bpp;
-                }
+                current_state = set_up_pixel_format(current_state);
             }
 
-            let video_data_receiver = VIDEO_DATA_CHANNEL.1.lock().unwrap();
-            for video_data in video_data_receiver.try_iter() {
-                current_state.frame_buffer = Some(video_data.frame_buffer);
-                current_state.screen_height = video_data.height;
-                current_state.screen_width = video_data.width;
-                current_state.screen_pitch = video_data.pitch;
-            }
+            // Render the current frame
+            let rendered_frame = render_frame(current_state, window);
+            current_state = rendered_frame.0;
+            window = rendered_frame.1;
 
-            match &current_state.frame_buffer {
-                Some(buffer) => {
-                    let width = (current_state.screen_pitch / current_state.bytes_per_pixel as u32)
-                        as usize;
-                    let height = current_state.screen_height as usize;
-                    let slice_of_pixel_buffer: &[u32] =
-                        std::slice::from_raw_parts(buffer.as_ptr() as *const u32, buffer.len()); // convert to &[u32] slice reference
-                    if slice_of_pixel_buffer.len() < width * height * 4 {
-                        // The frame buffer isn't big enough so lets add additional pixels just so we can display it
-                        let mut vec: Vec<u32> = slice_of_pixel_buffer.to_vec();
-                        vec.resize((width * height * 4) as usize, 0x0000FFFF); // Add any missing pixels with colour blue
-                        window.update_with_buffer(&vec, width, height).unwrap();
-                    } else {
-                        let _ = window.update_with_buffer(&slice_of_pixel_buffer, width, height);
-                    }
-                }
-                None => {
-                    println!("We don't have a buffer to display");
-                }
-            }
-
+            // Update the frame's inputs
             {
                 let mut buttons = BUTTONS_PRESSED.lock().unwrap();
-                buttons.0 = this_frames_pressed_buttons.clone(); // Update the current frame's inputs
+                buttons.0 = this_frames_pressed_buttons.clone();
             }
         }
     }

@@ -1,7 +1,10 @@
 use libretro_sys::PixelFormat;
+use minifb::Window;
 use std::sync::atomic::Ordering;
 
-use crate::{VideoData, BYTES_PER_PIXEL, VIDEO_DATA_CHANNEL};
+use crate::{
+    libretro::EmulatorState, VideoData, BYTES_PER_PIXEL, PIXEL_FORMAT_CHANNEL, VIDEO_DATA_CHANNEL,
+};
 
 pub struct EmulatorPixelFormat(pub PixelFormat);
 
@@ -43,6 +46,22 @@ pub unsafe extern "C" fn libretro_set_video_refresh_callback(
     }
 }
 
+pub fn set_up_pixel_format(mut current_state: EmulatorState) -> EmulatorState {
+    let pixel_format_receiver = &PIXEL_FORMAT_CHANNEL.1.lock().unwrap();
+
+    for pixel_format in pixel_format_receiver.try_iter() {
+        current_state.pixel_format.0 = pixel_format;
+        let bpp = match pixel_format {
+            PixelFormat::ARGB1555 | PixelFormat::RGB565 => 2,
+            PixelFormat::ARGB8888 => 4,
+        };
+        println!("Core will send us pixel data in format {:?}", pixel_format);
+        BYTES_PER_PIXEL.store(bpp, Ordering::SeqCst);
+        current_state.bytes_per_pixel = bpp;
+    }
+
+    return current_state;
+}
 
 fn convert_pixel_array_from_rgb565_to_xrgb8888(color_array: &[u8]) -> Box<[u32]> {
     let bytes_per_pixel = 2;
@@ -77,4 +96,44 @@ fn convert_pixel_array_from_rgb565_to_xrgb8888(color_array: &[u8]) -> Box<[u32]>
     }
 
     result.into_boxed_slice()
+}
+
+pub fn render_frame(
+    mut current_state: EmulatorState,
+    mut window: Window,
+) -> (EmulatorState, Window) {
+    let video_data_receiver = VIDEO_DATA_CHANNEL.1.lock().unwrap();
+    for video_data in video_data_receiver.try_iter() {
+        current_state.frame_buffer = Some(video_data.frame_buffer);
+        current_state.screen_height = video_data.height;
+        current_state.screen_width = video_data.width;
+        current_state.screen_pitch = video_data.pitch;
+    }
+
+    match &current_state.frame_buffer {
+        Some(buffer) => {
+            let width =
+                (current_state.screen_pitch / current_state.bytes_per_pixel as u32) as usize;
+            let height = current_state.screen_height as usize;
+            let slice_of_pixel_buffer: &[u32];
+            unsafe {
+                slice_of_pixel_buffer =
+                    std::slice::from_raw_parts(buffer.as_ptr() as *const u32, buffer.len());
+                // convert to &[u32] slice reference
+            }
+
+            if slice_of_pixel_buffer.len() < width * height * 4 {
+                // The frame buffer isn't big enough so lets add additional pixels just so we can display it
+                let mut vec: Vec<u32> = slice_of_pixel_buffer.to_vec();
+                vec.resize((width * height * 4) as usize, 0x0000FFFF); // Add any missing pixels with colour blue
+                window.update_with_buffer(&vec, width, height).unwrap();
+            } else {
+                let _ = window.update_with_buffer(&slice_of_pixel_buffer, width, height);
+            }
+        }
+        None => {
+            println!("We don't have a buffer to display");
+        }
+    }
+    return (current_state, window);
 }
