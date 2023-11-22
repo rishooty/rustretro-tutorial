@@ -3,21 +3,22 @@ mod input;
 mod libretro;
 mod video;
 use audio::AudioBuffer;
-use gilrs::{Event, Gilrs};
+use gilrs::{GamepadId, Gilrs};
 use libretro_sys::PixelFormat;
 use minifb::{Key, Window, WindowOptions};
 use once_cell::sync::Lazy;
 use rodio::{OutputStream, Sink};
 use video::set_up_pixel_format;
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::AtomicU8;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
 use crate::video::render_frame;
 
-static BUTTONS_PRESSED: Mutex<(Vec<i16>, Vec<i16>)> = Mutex::new((vec![], vec![]));
-
+static BUTTONS_PRESSED: Lazy<Mutex<(Vec<i16>, Vec<i16>)>> = Lazy::new(|| {
+    Mutex::new((vec![0; 16], vec![0; 16]))
+});
 static BYTES_PER_PIXEL: AtomicU8 = AtomicU8::new(4); // Default value of 4
 
 static PIXEL_FORMAT_CHANNEL: Lazy<(Sender<PixelFormat>, Arc<Mutex<Receiver<PixelFormat>>>)> =
@@ -110,40 +111,36 @@ fn main() {
     }
 
     // Prepare inputs/controllers
-    let mut this_frames_pressed_buttons = vec![0; 16];
     let config = libretro::setup_config().unwrap();
     let key_device_map = input::key_device_map(&config);
     let joypad_device_map = input::setup_joypad_device_map();
-    let mut gilrs = Gilrs::new().unwrap();
-    let mut active_gamepad = None;
+    let gilrs = Gilrs::new().unwrap();
+    let active_gamepad: &Option<GamepadId> = &None;
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        // Handle Input
-        while let Some(Event { id, .. }) = gilrs.next_event() {
-            active_gamepad = Some(id);
+        {
+            let mut buttons = BUTTONS_PRESSED.lock().unwrap();
+            let buttons_pressed = &mut buttons.0;
+    
+            // Handle input
+            if let Some(gamepad) = active_gamepad {
+                input::handle_gamepad_input(
+                    &joypad_device_map,
+                    &gilrs,
+                    &Some(*gamepad),
+                    buttons_pressed,
+                );
+            } else {
+                input::handle_keyboard_input(
+                    core_api,
+                    &window,
+                    &mut current_state,
+                    buttons_pressed,
+                    &key_device_map,
+                    &config,
+                );
+            }
         }
-
-        if !active_gamepad.is_none() {
-            let game_pad_input = input::handle_gamepad_input(
-                &joypad_device_map,
-                &gilrs,
-                &active_gamepad,
-                this_frames_pressed_buttons,
-            );
-            this_frames_pressed_buttons = game_pad_input;
-        } else {
-            let keyboard_input = input::handle_keyboard_input(
-                core_api,
-                &window,
-                current_state,
-                this_frames_pressed_buttons,
-                &key_device_map,
-                &config,
-            );
-            current_state = keyboard_input.0;
-            this_frames_pressed_buttons = keyboard_input.1;
-        }
-
         unsafe {
             (core_api.retro_run)();
             // One time setup after core init
@@ -155,12 +152,6 @@ fn main() {
             let rendered_frame = render_frame(current_state, window);
             current_state = rendered_frame.0;
             window = rendered_frame.1;
-
-            // Update the frame's inputs
-            {
-                let mut buttons = BUTTONS_PRESSED.lock().unwrap();
-                buttons.0 = this_frames_pressed_buttons.clone();
-            }
         }
     }
 }
