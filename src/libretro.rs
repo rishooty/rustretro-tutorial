@@ -1,3 +1,7 @@
+// This implementation is based on the guide provided by [RetroGameDeveloper/RetroReversing].
+// Original guide can be found at [https://www.retroreversing.com/CreateALibRetroFrontEndInRust].
+// Copyright (c) 2023 Nicholas Ricciuti
+//
 // libretro.rs
 //
 // This module provides the interface to the libretro core, including functions for
