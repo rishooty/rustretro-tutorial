@@ -12,11 +12,6 @@ use std::sync::atomic::AtomicU8;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use video::set_up_pixel_format;
-
-use crate::video::render_frame;
-
-static FRAME_BUFFER: Lazy<Mutex<Vec<u32>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
 static BUTTONS_PRESSED: Lazy<Mutex<(Vec<i16>, Vec<i16>)>> =
     Lazy::new(|| Mutex::new((vec![0; 16], vec![0; 16])));
@@ -152,11 +147,11 @@ fn main() {
             (core_api.retro_run)();
             // One time setup after core init
             if current_state.bytes_per_pixel == 0 {
-                current_state = set_up_pixel_format(current_state);
+                current_state = video::set_up_pixel_format(current_state);
             }
 
             // Render the current frame
-            let rendered_frame = render_frame(current_state, window);
+            let rendered_frame = video::render_frame(current_state, window);
             current_state = rendered_frame.0;
             window = rendered_frame.1;
         }

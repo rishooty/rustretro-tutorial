@@ -3,8 +3,7 @@ use minifb::Window;
 use std::sync::atomic::Ordering;
 
 use crate::{
-    libretro::EmulatorState, VideoData, BYTES_PER_PIXEL, FRAME_BUFFER, PIXEL_FORMAT_CHANNEL,
-    VIDEO_DATA_CHANNEL,
+    libretro::EmulatorState, VideoData, BYTES_PER_PIXEL, PIXEL_FORMAT_CHANNEL, VIDEO_DATA_CHANNEL,
 };
 
 pub struct EmulatorPixelFormat(pub PixelFormat);
@@ -99,10 +98,7 @@ fn convert_pixel_array_from_rgb565_to_xrgb8888(color_array: &[u8]) -> Box<[u32]>
     result.into_boxed_slice()
 }
 
-pub fn render_frame(
-    current_state: EmulatorState,
-    mut window: Window,
-) -> (EmulatorState, Window) {
+pub fn render_frame(current_state: EmulatorState, mut window: Window) -> (EmulatorState, Window) {
     let video_data_receiver = VIDEO_DATA_CHANNEL.1.lock().unwrap();
     for video_data in video_data_receiver.try_iter() {
         let source_width = video_data.width as usize;
