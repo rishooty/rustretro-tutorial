@@ -3,7 +3,7 @@ mod input;
 mod libretro;
 mod video;
 use audio::AudioBuffer;
-use gilrs::{GamepadId, Gilrs};
+use gilrs::{GamepadId, Gilrs, Gamepad};
 use libretro_sys::PixelFormat;
 use minifb::{Key, Window, WindowOptions};
 use once_cell::sync::Lazy;
@@ -121,7 +121,8 @@ fn main() {
         {
             let mut buttons = BUTTONS_PRESSED.lock().unwrap();
             let buttons_pressed = &mut buttons.0;
-    
+            let mut game_pad_active: bool = false;
+
             // Handle input
             if let Some(gamepad) = active_gamepad {
                 input::handle_gamepad_input(
@@ -130,16 +131,17 @@ fn main() {
                     &Some(*gamepad),
                     buttons_pressed,
                 );
-            } else {
-                input::handle_keyboard_input(
-                    core_api,
-                    &window,
-                    &mut current_state,
-                    buttons_pressed,
-                    &key_device_map,
-                    &config,
-                );
+                game_pad_active = false;
             }
+            input::handle_keyboard_input(
+                core_api,
+                &window,
+                &mut current_state,
+                buttons_pressed,
+                &key_device_map,
+                &config,
+                game_pad_active
+            );
         }
         unsafe {
             (core_api.retro_run)();

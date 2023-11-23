@@ -157,14 +157,18 @@ pub fn handle_keyboard_input(
     buttons_pressed: &mut Vec<i16>,
     key_device_map: &HashMap<String, usize>,
     config: &HashMap<String, String>,
+    game_pad_active: bool,
 ) {
     let mini_fb_keys_pressed = window.get_keys_pressed(KeyRepeat::No);
     for key in mini_fb_keys_pressed {
         let key_as_string = format!("{:?}", key).to_ascii_lowercase();
 
-        if let Some(&device_id) = key_device_map.get(&key_as_string) {
-            buttons_pressed[device_id as usize] = 1;
+        if !game_pad_active {
+            if let Some(&device_id) = key_device_map.get(&key_as_string) {
+                buttons_pressed[device_id as usize] = 1;
+            }
         }
+
         if &key_as_string == &config["input_save_state"] {
             unsafe {
                 libretro::save_state(
@@ -214,17 +218,19 @@ pub fn handle_keyboard_input(
         println!("Unhandled Key Pressed: {} ", key_as_string);
     }
 
-    let mini_fb_keys_released = window.get_keys_released();
-    for key in &mini_fb_keys_released {
-        let key_as_string = format!("{:?}", key).to_ascii_lowercase();
+    if !game_pad_active {
+        let mini_fb_keys_released = window.get_keys_released();
+        for key in &mini_fb_keys_released {
+            let key_as_string = format!("{:?}", key).to_ascii_lowercase();
 
-        if let Some(&device_id) = key_device_map.get(&key_as_string) {
-            buttons_pressed[device_id as usize] = 0;
-        } else {
-            println!(
-                "Unhandled Key Pressed: {} input_player1_a: {}",
-                key_as_string, config["input_player1_a"]
-            );
+            if let Some(&device_id) = key_device_map.get(&key_as_string) {
+                buttons_pressed[device_id as usize] = 0;
+            } else {
+                println!(
+                    "Unhandled Key Pressed: {} input_player1_a: {}",
+                    key_as_string, config["input_player1_a"]
+                );
+            }
         }
     }
 }
