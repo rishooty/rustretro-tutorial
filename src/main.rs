@@ -3,22 +3,24 @@ mod input;
 mod libretro;
 mod video;
 use audio::AudioBuffer;
-use gilrs::{GamepadId, Gilrs, Gamepad};
+use gilrs::{GamepadId, Gilrs};
 use libretro_sys::PixelFormat;
 use minifb::{Key, Window, WindowOptions};
 use once_cell::sync::Lazy;
 use rodio::{OutputStream, Sink};
-use video::set_up_pixel_format;
 use std::sync::atomic::AtomicU8;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use video::set_up_pixel_format;
 
 use crate::video::render_frame;
 
-static BUTTONS_PRESSED: Lazy<Mutex<(Vec<i16>, Vec<i16>)>> = Lazy::new(|| {
-    Mutex::new((vec![0; 16], vec![0; 16]))
-});
+static FRAME_BUFFER: Lazy<Mutex<Vec<u32>>> = Lazy::new(|| Mutex::new(Vec::new()));
+
+static BUTTONS_PRESSED: Lazy<Mutex<(Vec<i16>, Vec<i16>)>> =
+    Lazy::new(|| Mutex::new((vec![0; 16], vec![0; 16])));
+
 static BYTES_PER_PIXEL: AtomicU8 = AtomicU8::new(4); // Default value of 4
 
 static PIXEL_FORMAT_CHANNEL: Lazy<(Sender<PixelFormat>, Arc<Mutex<Receiver<PixelFormat>>>)> =
@@ -140,7 +142,7 @@ fn main() {
                 buttons_pressed,
                 &key_device_map,
                 &config,
-                game_pad_active
+                game_pad_active,
             );
         }
         unsafe {

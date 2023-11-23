@@ -3,7 +3,8 @@ use minifb::Window;
 use std::sync::atomic::Ordering;
 
 use crate::{
-    libretro::EmulatorState, VideoData, BYTES_PER_PIXEL, PIXEL_FORMAT_CHANNEL, VIDEO_DATA_CHANNEL,
+    libretro::EmulatorState, VideoData, BYTES_PER_PIXEL, FRAME_BUFFER, PIXEL_FORMAT_CHANNEL,
+    VIDEO_DATA_CHANNEL,
 };
 
 pub struct EmulatorPixelFormat(pub PixelFormat);
@@ -104,36 +105,34 @@ pub fn render_frame(
 ) -> (EmulatorState, Window) {
     let video_data_receiver = VIDEO_DATA_CHANNEL.1.lock().unwrap();
     for video_data in video_data_receiver.try_iter() {
-        current_state.frame_buffer = Some(video_data.frame_buffer);
-        current_state.screen_height = video_data.height;
-        current_state.screen_width = video_data.width;
-        current_state.screen_pitch = video_data.pitch;
-    }
+        let width = video_data.width as usize;
+        let height = video_data.height as usize;
+        let pitch = video_data.pitch as usize; // number of bytes per row
 
-    match &current_state.frame_buffer {
-        Some(buffer) => {
-            let width =
-                (current_state.screen_pitch / current_state.bytes_per_pixel as u32) as usize;
-            let height = current_state.screen_height as usize;
-            let slice_of_pixel_buffer: &[u32];
-            unsafe {
-                slice_of_pixel_buffer =
-                    std::slice::from_raw_parts(buffer.as_ptr() as *const u32, buffer.len());
-                // convert to &[u32] slice reference
-            }
+        // Ensure current_state.frame_buffer is Some and properly sized
+        let frame_buffer = current_state
+            .frame_buffer
+            .get_or_insert_with(|| vec![0; width * height]);
 
-            if slice_of_pixel_buffer.len() < width * height * 4 {
-                // The frame buffer isn't big enough so lets add additional pixels just so we can display it
-                let mut vec: Vec<u32> = slice_of_pixel_buffer.to_vec();
-                vec.resize((width * height * 4) as usize, 0x0000FFFF); // Add any missing pixels with colour blue
-                window.update_with_buffer(&vec, width, height).unwrap();
-            } else {
-                let _ = window.update_with_buffer(&slice_of_pixel_buffer, width, height);
+        // Copy each row, taking into account the pitch
+        for y in 0..height {
+            let source_start = y * pitch / 2; // divide by 2 because the pitch is based on 2 bytes per pixel
+            let dest_start = y * width;
+            // Safely get the slice of the current row from the source buffer
+            if let Some(row) = video_data
+                .frame_buffer
+                .get(source_start..source_start + width)
+            {
+                // Copy over the row; this assumes that the conversion to XRGB8888 has already been done
+                frame_buffer[dest_start..dest_start + width].copy_from_slice(row);
             }
         }
-        None => {
-            println!("We don't have a buffer to display");
+
+        // Update the window
+        if let Some(buffer) = &current_state.frame_buffer {
+            window.update_with_buffer(buffer, width, height).unwrap();
         }
     }
+
     return (current_state, window);
 }
