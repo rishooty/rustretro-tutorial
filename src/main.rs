@@ -50,9 +50,6 @@ struct VideoData {
     pitch: u32,
 }
 
-const WIDTH: usize = 256;
-const HEIGHT: usize = 140;
-
 fn main() {
     let (rom_name, library_name) = libretro::parse_command_line_arguments();
     let mut current_state = libretro::EmulatorState {
@@ -68,10 +65,16 @@ fn main() {
         bytes_per_pixel: 0,
     };
 
-    let mut window = Window::new("Rust Game", WIDTH, HEIGHT, WindowOptions::default())
-        .unwrap_or_else(|e| {
-            panic!("{}", e);
-        });
+    let mut window = Window::new(
+        "Test",
+        256,
+        144,
+        WindowOptions {
+            resize: true,
+            ..WindowOptions::default()
+        },
+    )
+    .expect("Unable to open Window");
 
     window.limit_update_rate(Some(std::time::Duration::from_micros(16600))); // ~60fps
 

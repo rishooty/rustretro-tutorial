@@ -100,38 +100,58 @@ fn convert_pixel_array_from_rgb565_to_xrgb8888(color_array: &[u8]) -> Box<[u32]>
 }
 
 pub fn render_frame(
-    mut current_state: EmulatorState,
+    current_state: EmulatorState,
     mut window: Window,
 ) -> (EmulatorState, Window) {
     let video_data_receiver = VIDEO_DATA_CHANNEL.1.lock().unwrap();
     for video_data in video_data_receiver.try_iter() {
-        let width = video_data.width as usize;
-        let height = video_data.height as usize;
+        let source_width = video_data.width as usize;
+        let source_height = video_data.height as usize;
         let pitch = video_data.pitch as usize; // number of bytes per row
 
-        // Ensure current_state.frame_buffer is Some and properly sized
-        let frame_buffer = current_state
-            .frame_buffer
-            .get_or_insert_with(|| vec![0; width * height]);
+        let window_size = window.get_size();
+        let scale_x = window_size.0 / source_width;
+        let scale_y = window_size.1 / source_height;
+        let scale = scale_y.min(scale_x); // maintain aspect ratio
 
-        // Copy each row, taking into account the pitch
-        for y in 0..height {
-            let source_start = y * pitch / 2; // divide by 2 because the pitch is based on 2 bytes per pixel
-            let dest_start = y * width;
-            // Safely get the slice of the current row from the source buffer
-            if let Some(row) = video_data
-                .frame_buffer
-                .get(source_start..source_start + width)
-            {
-                // Copy over the row; this assumes that the conversion to XRGB8888 has already been done
-                frame_buffer[dest_start..dest_start + width].copy_from_slice(row);
+        let target_width = source_width * scale;
+        let target_height = source_height * scale;
+
+        // Calculate padding for centering the image
+        let bpp = BYTES_PER_PIXEL.load(Ordering::SeqCst) as usize;
+        let padding_x = (window_size.0 - target_width) / bpp;
+        let padding_y = (window_size.1 - target_height) / bpp;
+
+        // Prepare the buffer that will be sent to the window
+        let mut window_buffer = vec![0; window_size.0 * window_size.1];
+        for y in 0..source_height {
+            let source_start = y * pitch / bpp; // divide by 2 because the pitch is based on 2 bytes per pixel
+            let dest_start = (y * scale + padding_y) * window_size.0 + padding_x;
+
+            // Copy each row, taking into account the pitch and scaling
+            for x in 0..source_width {
+                let dest_index = dest_start + x * scale;
+                let source_index = source_start + x;
+
+                // Copy the pixel `scale` times in both X and Y dimensions
+                for dx in 0..scale {
+                    for dy in 0..scale {
+                        let window_index = (dest_index + dy * window_size.0 + dx) as usize;
+                        let source_pixel = video_data
+                            .frame_buffer
+                            .get(source_index)
+                            .copied()
+                            .unwrap_or(0);
+                        window_buffer[window_index] = source_pixel;
+                    }
+                }
             }
         }
 
         // Update the window
-        if let Some(buffer) = &current_state.frame_buffer {
-            window.update_with_buffer(buffer, width, height).unwrap();
-        }
+        window
+            .update_with_buffer(&window_buffer, window_size.0, window_size.1)
+            .unwrap();
     }
 
     return (current_state, window);
