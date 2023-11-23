@@ -8,7 +8,7 @@ mod input;
 mod libretro;
 mod video;
 use audio::AudioBuffer;
-use gilrs::{GamepadId, Gilrs};
+use gilrs::{GamepadId, Gilrs, Event};
 use libretro_sys::PixelFormat;
 use minifb::{Key, Window, WindowOptions};
 use once_cell::sync::Lazy;
@@ -125,9 +125,9 @@ fn main() {
     // Prepare configurations for input handling
     let config = libretro::setup_config().unwrap();
     let key_device_map = input::key_device_map(&config);
-    let joypad_device_map = input::setup_joypad_device_map();
-    let gilrs = Gilrs::new().unwrap(); // Initialize gamepad handling
-    let active_gamepad: &Option<GamepadId> = &None;
+    let joypad_device_map = input::setup_joypad_device_map(&config);
+    let mut gilrs = Gilrs::new().unwrap(); // Initialize gamepad handling
+    let mut active_gamepad: Option<GamepadId> = None;
 
     // Main application loop
     while window.is_open() && !window.is_key_down(Key::Escape) {
@@ -136,15 +136,20 @@ fn main() {
             let buttons_pressed = &mut buttons.0;
             let mut game_pad_active: bool = false;
 
+            while let Some(Event { id, .. }) = gilrs.next_event() {
+                // println!("{:?} New event from {}: {:?}", time, id, event);
+                active_gamepad = Some(id);
+            }
+
             // Handle gamepad and keyboard input
             if let Some(gamepad) = active_gamepad {
                 input::handle_gamepad_input(
                     &joypad_device_map,
                     &gilrs,
-                    &Some(*gamepad),
+                    &Some(gamepad),
                     buttons_pressed,
                 );
-                game_pad_active = false;
+                game_pad_active = true;
             }
             input::handle_keyboard_input(
                 core_api,

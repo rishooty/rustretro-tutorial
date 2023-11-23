@@ -3,7 +3,7 @@
 // Copyright (c) 2023 Nicholas Ricciuti
 
 use gilrs::{Button, GamepadId, Gilrs};
-use libretro_sys::CoreAPI;
+use libretro_sys::{CoreAPI, DEVICE_ID_JOYPAD_R, DEVICE_ID_JOYPAD_A, DEVICE_ID_JOYPAD_B, DEVICE_ID_JOYPAD_X, DEVICE_ID_JOYPAD_Y, DEVICE_ID_JOYPAD_L, DEVICE_ID_JOYPAD_DOWN, DEVICE_ID_JOYPAD_UP, DEVICE_ID_JOYPAD_RIGHT, DEVICE_ID_JOYPAD_LEFT, DEVICE_ID_JOYPAD_START, DEVICE_ID_JOYPAD_SELECT};
 use minifb::{KeyRepeat, Window};
 use std::collections::HashMap;
 
@@ -11,23 +11,6 @@ use crate::{
     libretro::{self, EmulatorState},
     BUTTONS_PRESSED,
 };
-
-pub const BUTTON_ARRAY: [Button; 14] = [
-    Button::South,
-    Button::North,
-    Button::East,
-    Button::West,
-    Button::Start,
-    Button::Select,
-    Button::DPadDown,
-    Button::DPadUp,
-    Button::DPadLeft,
-    Button::DPadRight,
-    Button::LeftTrigger,
-    Button::LeftTrigger2,
-    Button::RightTrigger,
-    Button::RightTrigger2,
-];
 
 pub fn key_device_map(config: &HashMap<String, String>) -> HashMap<String, usize> {
     HashMap::from([
@@ -82,6 +65,59 @@ pub fn key_device_map(config: &HashMap<String, String>) -> HashMap<String, usize
     ])
 }
 
+pub fn setup_joypad_device_map(config: &HashMap<String, String>) -> HashMap<String, usize> {
+    HashMap::from([
+        (
+            config["input_player1_a_btn"].clone(),
+            libretro_sys::DEVICE_ID_JOYPAD_A as usize,
+        ),
+        (
+            config["input_player1_b_btn"].clone(),
+            libretro_sys::DEVICE_ID_JOYPAD_B as usize,
+        ),
+        (
+            config["input_player1_x_btn"].clone(),
+            libretro_sys::DEVICE_ID_JOYPAD_X as usize,
+        ),
+        (
+            config["input_player1_y_btn"].clone(),
+            libretro_sys::DEVICE_ID_JOYPAD_Y as usize,
+        ),
+        (
+            config["input_player1_l_btn"].clone(),
+            libretro_sys::DEVICE_ID_JOYPAD_L as usize,
+        ),
+        (
+            config["input_player1_r_btn"].clone(),
+            libretro_sys::DEVICE_ID_JOYPAD_R as usize,
+        ),
+        (
+            config["input_player1_down_btn"].clone(),
+            libretro_sys::DEVICE_ID_JOYPAD_DOWN as usize,
+        ),
+        (
+            config["input_player1_up_btn"].clone(),
+            libretro_sys::DEVICE_ID_JOYPAD_UP as usize,
+        ),
+        (
+            config["input_player1_right_btn"].clone(),
+            libretro_sys::DEVICE_ID_JOYPAD_RIGHT as usize,
+        ),
+        (
+            config["input_player1_left_btn"].clone(),
+            libretro_sys::DEVICE_ID_JOYPAD_LEFT as usize,
+        ),
+        (
+            config["input_player1_start_btn"].clone(),
+            libretro_sys::DEVICE_ID_JOYPAD_START as usize,
+        ),
+        (
+            config["input_player1_select_btn"].clone(),
+            libretro_sys::DEVICE_ID_JOYPAD_SELECT as usize,
+        ),
+    ])
+}
+
 pub unsafe extern "C" fn libretro_set_input_poll_callback() {
     println!("libretro_set_input_poll_callback")
 }
@@ -96,59 +132,35 @@ pub unsafe extern "C" fn libretro_set_input_state_callback(
     buttons.0.get(id as usize).copied().unwrap_or(0)
 }
 
-pub fn setup_joypad_device_map() -> HashMap<Button, usize> {
-    return HashMap::from([
-        (Button::South, libretro_sys::DEVICE_ID_JOYPAD_A as usize),
-        (Button::East, libretro_sys::DEVICE_ID_JOYPAD_B as usize),
-        (Button::West, libretro_sys::DEVICE_ID_JOYPAD_X as usize),
-        (Button::North, libretro_sys::DEVICE_ID_JOYPAD_Y as usize),
-        (
-            Button::LeftTrigger,
-            libretro_sys::DEVICE_ID_JOYPAD_L as usize,
-        ),
-        (
-            Button::LeftTrigger2,
-            libretro_sys::DEVICE_ID_JOYPAD_L2 as usize,
-        ),
-        (
-            Button::RightTrigger,
-            libretro_sys::DEVICE_ID_JOYPAD_R as usize,
-        ),
-        (
-            Button::RightTrigger2,
-            libretro_sys::DEVICE_ID_JOYPAD_R2 as usize,
-        ),
-        (
-            Button::DPadDown,
-            libretro_sys::DEVICE_ID_JOYPAD_DOWN as usize,
-        ),
-        (Button::DPadUp, libretro_sys::DEVICE_ID_JOYPAD_UP as usize),
-        (
-            Button::DPadRight,
-            libretro_sys::DEVICE_ID_JOYPAD_RIGHT as usize,
-        ),
-        (
-            Button::DPadLeft,
-            libretro_sys::DEVICE_ID_JOYPAD_LEFT as usize,
-        ),
-        (Button::Start, libretro_sys::DEVICE_ID_JOYPAD_START as usize),
-        (
-            Button::Select,
-            libretro_sys::DEVICE_ID_JOYPAD_SELECT as usize,
-        ),
-    ]);
+fn libretro_to_button(libretro_button: u32) -> Option<Button> {
+    match libretro_button {
+        DEVICE_ID_JOYPAD_A => Some(Button::East),
+        DEVICE_ID_JOYPAD_B => Some(Button::South),
+        DEVICE_ID_JOYPAD_X => Some(Button::North),
+        DEVICE_ID_JOYPAD_Y => Some(Button::West),
+        DEVICE_ID_JOYPAD_L => Some(Button::LeftTrigger),
+        DEVICE_ID_JOYPAD_R => Some(Button::RightTrigger),
+        DEVICE_ID_JOYPAD_DOWN => Some(Button::DPadDown),
+        DEVICE_ID_JOYPAD_UP => Some(Button::DPadUp),
+        DEVICE_ID_JOYPAD_RIGHT => Some(Button::DPadRight),
+        DEVICE_ID_JOYPAD_LEFT => Some(Button::DPadLeft),
+        DEVICE_ID_JOYPAD_START => Some(Button::Start),
+        DEVICE_ID_JOYPAD_SELECT => Some(Button::Select),
+        _ => None,
+    }
 }
 
 pub fn handle_gamepad_input(
-    joypad_device_map: &HashMap<Button, usize>,
+    joypad_device_map: &HashMap<String, usize>,
     gilrs: &Gilrs,
     active_gamepad: &Option<GamepadId>,
     buttons_pressed: &mut Vec<i16>,
 ) {
     if let Some(gamepad) = active_gamepad.map(|id| gilrs.gamepad(id)) {
-        for button in BUTTON_ARRAY {
-            if let Some(&libretro_button) = joypad_device_map.get(&button) {
-                buttons_pressed[libretro_button as usize] = gamepad.is_pressed(button) as i16;
+        for (button, libretro_button) in joypad_device_map {
+            if let Some(gilrs_button) = libretro_to_button(*libretro_button as u32) {
+                buttons_pressed[*libretro_button as usize] =
+                    gamepad.is_pressed(gilrs_button) as i16;
             }
         }
     }
