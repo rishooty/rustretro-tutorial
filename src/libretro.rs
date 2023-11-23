@@ -1,3 +1,8 @@
+// libretro.rs
+//
+// This module provides the interface to the libretro core, including functions for
+// loading ROMs, managing save states, and handling configurations.
+
 use crate::PIXEL_FORMAT_CHANNEL;
 use crate::video;
 use clap::Parser;
@@ -15,13 +20,18 @@ use std::{
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
 };
+
+// Expected version of the libretro API.
 const EXPECTED_LIB_RETRO_VERSION: u32 = 1;
 
+// Represents the emulator state and configuration.
 #[derive(Parser)]
 pub struct EmulatorState {
+    // Path to the ROM file to be loaded.
     #[arg(help = "Sets the path to the ROM file to load", index = 1)]
     pub rom_name: String,
     #[arg(short = 'L', default_value = "default_library")]
+    // Name of the core library to be loaded.
     pub library_name: String,
     #[arg(skip)]
     pub frame_buffer: Option<Vec<u32>>,
@@ -41,6 +51,7 @@ pub struct EmulatorState {
     pub bytes_per_pixel: u8,
 }
 
+// Parses command-line arguments to obtain the ROM name and core library name.
 pub fn parse_command_line_arguments() -> (String, String) {
     let emulator_state = EmulatorState::parse();
 
@@ -50,6 +61,7 @@ pub fn parse_command_line_arguments() -> (String, String) {
     (emulator_state.rom_name, emulator_state.library_name)
 }
 
+// Loads the specified ROM file using the provided Core API.
 pub unsafe fn load_rom_file(core_api: &CoreAPI, rom_name: &String) -> bool {
     let cstr_rom_name = CString::new(rom_name.clone()).expect("Failed to create CString");
     let contents = fs::read(rom_name).expect("Failed to read file");
@@ -69,6 +81,7 @@ pub unsafe fn load_rom_file(core_api: &CoreAPI, rom_name: &String) -> bool {
     return was_load_successful;
 }
 
+// Callback function for the libretro environment.
 unsafe extern "C" fn libretro_environment_callback(command: u32, return_data: *mut c_void) -> bool {
     match command {
         libretro_sys::ENVIRONMENT_GET_CAN_DUPE => {
@@ -91,6 +104,7 @@ unsafe extern "C" fn libretro_environment_callback(command: u32, return_data: *m
     false
 }
 
+// Represents a loaded libretro core with associated functions.
 pub struct Core {
     pub dylib: Library,
     pub api: CoreAPI,
@@ -177,12 +191,16 @@ impl Core {
     }
 }
 
+// Handles dropping of the Core, which could include cleanup tasks.
 impl Drop for Core {
     fn drop(&mut self) {
-        // If you need to do any cleanup when the Core is dropped, do it here.
+        // Cleanup code here...
     }
 }
 
+// Utility functions for managing save states and configuration files follow.
+
+// `get_save_state_path` computes the path for a save state file.
 fn get_save_state_path(
     save_directory: &String,
     game_file_name: &str,
@@ -217,6 +235,7 @@ fn get_save_state_path(
     Some(save_state_path)
 }
 
+// `save_state` saves the current state of the emulator to a file.
 pub unsafe fn save_state(
     core_api: &CoreAPI,
     save_directory: &String,
@@ -241,6 +260,7 @@ pub unsafe fn save_state(
     );
 }
 
+// `load_state` loads the emulator state from a file.
 pub unsafe fn load_state(
     core_api: &CoreAPI,
     save_directory: &String,
@@ -273,6 +293,7 @@ pub unsafe fn load_state(
     }
 }
 
+// `get_retroarch_config_path` finds the path to the RetroArch configuration.
 fn get_retroarch_config_path() -> PathBuf {
     return match std::env::consts::OS {
         "windows" => PathBuf::from(env::var("APPDATA").ok().unwrap()).join("retroarch"),
@@ -282,6 +303,7 @@ fn get_retroarch_config_path() -> PathBuf {
     };
 }
 
+// `parse_retroarch_config` parses the RetroArch configuration file.
 fn parse_retroarch_config(config_file: &Path) -> Result<HashMap<String, String>, String> {
     let file = File::open(config_file).map_err(|e| format!("Failed to open file: {}", e))?;
     let reader = BufReader::new(file);
@@ -298,6 +320,7 @@ fn parse_retroarch_config(config_file: &Path) -> Result<HashMap<String, String>,
     Ok(config_map)
 }
 
+// `setup_config` merges various configuration sources into a single HashMap.
 pub fn setup_config() -> Result<HashMap<String, String>, String> {
     let retro_arch_config_path = get_retroarch_config_path();
     let our_config = parse_retroarch_config(Path::new("./rustroarch.cfg"));

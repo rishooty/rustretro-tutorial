@@ -1,3 +1,8 @@
+// video.rs
+//
+// This module handles video output for the emulator, including pixel format conversions,
+// rendering frames, and interfacing with the libretro video callbacks.
+
 use libretro_sys::PixelFormat;
 use minifb::Window;
 use std::sync::atomic::Ordering;
@@ -6,14 +11,17 @@ use crate::{
     libretro::EmulatorState, VideoData, BYTES_PER_PIXEL, PIXEL_FORMAT_CHANNEL, VIDEO_DATA_CHANNEL,
 };
 
+// Represents the pixel format used by the emulator.
 pub struct EmulatorPixelFormat(pub PixelFormat);
 
+// Provides a default pixel format for the emulator.
 impl Default for EmulatorPixelFormat {
     fn default() -> Self {
         EmulatorPixelFormat(PixelFormat::ARGB8888)
     }
 }
 
+// Callback function that the libretro core will use to pass video frame data.
 pub unsafe extern "C" fn libretro_set_video_refresh_callback(
     frame_buffer_data: *const libc::c_void,
     width: libc::c_uint,
@@ -46,6 +54,7 @@ pub unsafe extern "C" fn libretro_set_video_refresh_callback(
     }
 }
 
+// Sets up the pixel format for the emulator based on the libretro core's specifications.
 pub fn set_up_pixel_format(mut current_state: EmulatorState) -> EmulatorState {
     let pixel_format_receiver = &PIXEL_FORMAT_CHANNEL.1.lock().unwrap();
 
@@ -63,6 +72,7 @@ pub fn set_up_pixel_format(mut current_state: EmulatorState) -> EmulatorState {
     return current_state;
 }
 
+// Converts a pixel array from RGB565 format to XRGB8888 format.
 fn convert_pixel_array_from_rgb565_to_xrgb8888(color_array: &[u8]) -> Box<[u32]> {
     let bytes_per_pixel = 2;
     assert_eq!(
@@ -98,18 +108,25 @@ fn convert_pixel_array_from_rgb565_to_xrgb8888(color_array: &[u8]) -> Box<[u32]>
     result.into_boxed_slice()
 }
 
+// Renders the frame received from the libretro core to the window.
 pub fn render_frame(current_state: EmulatorState, mut window: Window) -> (EmulatorState, Window) {
+    // Lock the video data channel to prevent data races
     let video_data_receiver = VIDEO_DATA_CHANNEL.1.lock().unwrap();
+
+    // Iterate over the video data received from the core
     for video_data in video_data_receiver.try_iter() {
+        // Extract the video data dimensions
         let source_width = video_data.width as usize;
         let source_height = video_data.height as usize;
         let pitch = video_data.pitch as usize; // number of bytes per row
 
+        // Calculate the window size
         let window_size = window.get_size();
         let scale_x = window_size.0 / source_width;
         let scale_y = window_size.1 / source_height;
         let scale = scale_y.min(scale_x); // maintain aspect ratio
 
+        // Calculate the target dimensions
         let target_width = source_width * scale;
         let target_height = source_height * scale;
 
