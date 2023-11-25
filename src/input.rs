@@ -1,6 +1,12 @@
 // This implementation is based on the guide provided by [RetroGameDeveloper/RetroReversing].
 // Original guide can be found at [https://www.retroreversing.com/CreateALibRetroFrontEndInRust].
 // Copyright (c) 2023 Nicholas Ricciuti
+//
+// input.rs
+//
+// This module handles input processing for the emulator, dealing with both
+// keyboard and gamepad inputs. It utilizes the gilrs library for gamepad
+// support and minifb for keyboard inputs.
 
 use gilrs::{Button, GamepadId, Gilrs};
 use libretro_sys::{
@@ -16,6 +22,7 @@ use crate::{
     BUTTONS_PRESSED,
 };
 
+/// Maps keyboard key names to libretro device IDs based on the provided configuration.
 pub fn key_device_map(config: &HashMap<String, String>) -> HashMap<String, usize> {
     HashMap::from([
         (
@@ -69,6 +76,7 @@ pub fn key_device_map(config: &HashMap<String, String>) -> HashMap<String, usize
     ])
 }
 
+/// Sets up the mapping between gamepad buttons and libretro device IDs.
 pub fn setup_joypad_device_map(config: &HashMap<String, String>) -> HashMap<String, usize> {
     HashMap::from([
         (
@@ -158,10 +166,12 @@ pub fn setup_joypad_device_map(config: &HashMap<String, String>) -> HashMap<Stri
     ])
 }
 
+/// Callback function for polling input states. Used primarily for logging in this context.
 pub unsafe extern "C" fn libretro_set_input_poll_callback() {
     println!("libretro_set_input_poll_callback")
 }
 
+/// Retrieves the state of a specific input identified by libretro device IDs.
 pub unsafe extern "C" fn libretro_set_input_state_callback(
     port: libc::c_uint,
     device: libc::c_uint,
@@ -172,6 +182,7 @@ pub unsafe extern "C" fn libretro_set_input_state_callback(
     buttons.0.get(id as usize).copied().unwrap_or(0)
 }
 
+/// Converts a libretro device ID to the corresponding gilrs Button.
 fn libretro_to_button(libretro_button: u32) -> Option<Button> {
     match libretro_button {
         DEVICE_ID_JOYPAD_A => Some(Button::East),
@@ -190,6 +201,7 @@ fn libretro_to_button(libretro_button: u32) -> Option<Button> {
     }
 }
 
+/// Processes gamepad inputs and updates button states.
 pub fn handle_gamepad_input(
     joypad_device_map: &HashMap<String, usize>,
     gilrs: &Gilrs,
@@ -206,6 +218,7 @@ pub fn handle_gamepad_input(
     }
 }
 
+/// Processes keyboard inputs, updates button states, and handles special input actions.
 pub fn handle_keyboard_input(
     core_api: &CoreAPI,
     window: &Window,
