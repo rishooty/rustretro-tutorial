@@ -1,44 +1,82 @@
-use std::ptr;
+// This implementation is based on the guide provided by [RetroGameDeveloper/RetroReversing].
+// Original guide can be found at [https://www.retroreversing.com/CreateALibRetroFrontEndInRust].
+// Copyright (c) 2023 Nicholas Ricciuti
+//
+// video.rs
+//
+// This module handles video output for the emulator, including pixel format conversions,
+// rendering frames, and interfacing with the libretro video callbacks.
 
-use crate::CURRENT_EMULATOR_STATE;
-use libretro_sys::{CoreAPI, GameGeometry, GameInfo, PixelFormat, SystemAvInfo, SystemTiming};
+use libretro_sys::PixelFormat;
+use minifb::Window;
+use std::sync::atomic::Ordering;
 
+use crate::{
+    libretro::EmulatorState, VideoData, BYTES_PER_PIXEL, PIXEL_FORMAT_CHANNEL, VIDEO_DATA_CHANNEL,
+};
+
+// Represents the pixel format used by the emulator.
 pub struct EmulatorPixelFormat(pub PixelFormat);
 
+// Provides a default pixel format for the emulator.
 impl Default for EmulatorPixelFormat {
     fn default() -> Self {
         EmulatorPixelFormat(PixelFormat::ARGB8888)
     }
 }
 
+// Callback function that the libretro core will use to pass video frame data.
 pub unsafe extern "C" fn libretro_set_video_refresh_callback(
     frame_buffer_data: *const libc::c_void,
     width: libc::c_uint,
     height: libc::c_uint,
     pitch: libc::size_t,
 ) {
-    if frame_buffer_data == ptr::null() {
+    if frame_buffer_data.is_null() {
         println!("frame_buffer_data was null");
         return;
     }
-    let length_of_frame_buffer =
-        ((pitch as u32) * height) * CURRENT_EMULATOR_STATE.bytes_per_pixel as u32;
+    let bpp = BYTES_PER_PIXEL.load(Ordering::SeqCst) as u32;
+    let length_of_frame_buffer = ((pitch as u32) * height) * bpp;
+
     let buffer_slice = std::slice::from_raw_parts(
         frame_buffer_data as *const u8,
         length_of_frame_buffer as usize,
     );
     let result = convert_pixel_array_from_rgb565_to_xrgb8888(buffer_slice);
 
-    // Create a Vec<u8> from the slice
-    let buffer_vec = Vec::from(result);
+    let video_data = VideoData {
+        frame_buffer: Vec::from(result),
+        width: width as u32,
+        height: height as u32,
+        pitch: pitch as u32,
+    };
 
-    // Wrap the Vec<u8> in an Some Option and assign it to the frame_buffer field
-    CURRENT_EMULATOR_STATE.frame_buffer = Some(buffer_vec);
-    CURRENT_EMULATOR_STATE.screen_height = height;
-    CURRENT_EMULATOR_STATE.screen_width = width;
-    CURRENT_EMULATOR_STATE.screen_pitch = pitch as u32;
+    if let Err(e) = VIDEO_DATA_CHANNEL.0.send(video_data) {
+        eprintln!("Failed to send video data: {:?}", e);
+        // Handle error appropriately
+    }
 }
 
+// Sets up the pixel format for the emulator based on the libretro core's specifications.
+pub fn set_up_pixel_format(mut current_state: EmulatorState) -> EmulatorState {
+    let pixel_format_receiver = &PIXEL_FORMAT_CHANNEL.1.lock().unwrap();
+
+    for pixel_format in pixel_format_receiver.try_iter() {
+        current_state.pixel_format.0 = pixel_format;
+        let bpp = match pixel_format {
+            PixelFormat::ARGB1555 | PixelFormat::RGB565 => 2,
+            PixelFormat::ARGB8888 => 4,
+        };
+        println!("Core will send us pixel data in format {:?}", pixel_format);
+        BYTES_PER_PIXEL.store(bpp, Ordering::SeqCst);
+        current_state.bytes_per_pixel = bpp;
+    }
+
+    return current_state;
+}
+
+// Converts a pixel array from RGB565 format to XRGB8888 format.
 fn convert_pixel_array_from_rgb565_to_xrgb8888(color_array: &[u8]) -> Box<[u32]> {
     let bytes_per_pixel = 2;
     assert_eq!(
@@ -72,4 +110,66 @@ fn convert_pixel_array_from_rgb565_to_xrgb8888(color_array: &[u8]) -> Box<[u32]>
     }
 
     result.into_boxed_slice()
+}
+
+// Renders the frame received from the libretro core to the window.
+pub fn render_frame(current_state: EmulatorState, mut window: Window) -> (EmulatorState, Window) {
+    // Lock the video data channel to prevent data races
+    let video_data_receiver = VIDEO_DATA_CHANNEL.1.lock().unwrap();
+
+    // Iterate over the video data received from the core
+    for video_data in video_data_receiver.try_iter() {
+        // Extract the video data dimensions
+        let source_width = video_data.width as usize;
+        let source_height = video_data.height as usize;
+        let pitch = video_data.pitch as usize; // number of bytes per row
+
+        // Calculate the window size
+        let window_size = window.get_size();
+        let scale_x = window_size.0 / source_width;
+        let scale_y = window_size.1 / source_height;
+        let scale = scale_y.min(scale_x); // maintain aspect ratio
+
+        // Calculate the target dimensions
+        let target_width = source_width * scale;
+        let target_height = source_height * scale;
+
+        // Calculate padding for centering the image
+        let bpp = BYTES_PER_PIXEL.load(Ordering::SeqCst) as usize;
+        let padding_x = (window_size.0 - target_width) / bpp;
+        let padding_y = (window_size.1 - target_height) / bpp;
+
+        // Prepare the buffer that will be sent to the window
+        let mut window_buffer = vec![0; window_size.0 * window_size.1];
+        for y in 0..source_height {
+            let source_start = y * pitch / bpp; // divide by 2 because the pitch is based on 2 bytes per pixel
+            let dest_start = (y * scale + padding_y) * window_size.0 + padding_x;
+
+            // Copy each row, taking into account the pitch and scaling
+            for x in 0..source_width {
+                let dest_index = dest_start + x * scale;
+                let source_index = source_start + x;
+
+                // Copy the pixel `scale` times in both X and Y dimensions
+                for dx in 0..scale {
+                    for dy in 0..scale {
+                        let window_index = (dest_index + dy * window_size.0 + dx) as usize;
+                        let source_pixel = video_data
+                            .frame_buffer
+                            .get(source_index)
+                            .copied()
+                            .unwrap_or(0);
+                        window_buffer[window_index] = source_pixel;
+                    }
+                }
+            }
+        }
+
+        // Update the window
+        window
+            .update_with_buffer(&window_buffer, window_size.0, window_size.1)
+            .unwrap();
+    }
+
+    return (current_state, window);
 }

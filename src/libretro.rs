@@ -1,7 +1,22 @@
-use crate::CURRENT_EMULATOR_STATE;
+// This implementation is based on the guide provided by [RetroGameDeveloper/RetroReversing].
+// Original guide can be found at [https://www.retroreversing.com/CreateALibRetroFrontEndInRust].
+// Copyright (c) 2023 Nicholas Ricciuti
+//
+// libretro.rs
+//
+// This module provides the interface to the libretro core, including functions for
+// loading ROMs, managing save states, and handling configurations.
+
+use crate::PIXEL_FORMAT_CHANNEL;
+use crate::video;
+use clap::Parser;
 use libc::c_void;
 use libloading::Library;
+use libretro_sys::GameInfo;
 use libretro_sys::{CoreAPI, GameGeometry, PixelFormat, SystemAvInfo, SystemTiming};
+use std::ffi::CString;
+use std::fs;
+use std::ptr;
 use std::{
     collections::HashMap,
     env,
@@ -9,11 +24,68 @@ use std::{
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
 };
+
+// Expected version of the libretro API.
 const EXPECTED_LIB_RETRO_VERSION: u32 = 1;
 
-pub type EnvironmentCallback =
-    unsafe extern "C" fn(command: libc::c_uint, data: *mut libc::c_void) -> bool;
+// Represents the emulator state and configuration.
+#[derive(Parser)]
+pub struct EmulatorState {
+    // Path to the ROM file to be loaded.
+    #[arg(help = "Sets the path to the ROM file to load", index = 1)]
+    pub rom_name: String,
+    #[arg(short = 'L', default_value = "default_library")]
+    // Name of the core library to be loaded.
+    pub library_name: String,
+    #[arg(skip)]
+    pub frame_buffer: Option<Vec<u32>>,
+    #[arg(skip)]
+    pub screen_pitch: u32,
+    #[arg(skip)]
+    pub screen_width: u32,
+    #[arg(skip)]
+    pub screen_height: u32,
+    #[arg(skip)]
+    pub current_save_slot: u8,
+    #[arg(skip)]
+    pub av_info: Option<SystemAvInfo>,
+    #[arg(skip)]
+    pub pixel_format: video::EmulatorPixelFormat,
+    #[arg(skip)]
+    pub bytes_per_pixel: u8,
+}
 
+// Parses command-line arguments to obtain the ROM name and core library name.
+pub fn parse_command_line_arguments() -> (String, String) {
+    let emulator_state = EmulatorState::parse();
+
+    println!("ROM name: {}", emulator_state.rom_name);
+    println!("Core Library name: {}", emulator_state.library_name);
+
+    (emulator_state.rom_name, emulator_state.library_name)
+}
+
+// Loads the specified ROM file using the provided Core API.
+pub unsafe fn load_rom_file(core_api: &CoreAPI, rom_name: &String) -> bool {
+    let cstr_rom_name = CString::new(rom_name.clone()).expect("Failed to create CString");
+    let contents = fs::read(rom_name).expect("Failed to read file");
+    let data: *const c_void = contents.as_ptr() as *const c_void;
+
+    let game_info = GameInfo {
+        path: cstr_rom_name.as_ptr(),
+        data,
+        size: contents.len(),
+        meta: ptr::null(),
+    };
+
+    let was_load_successful = (core_api.retro_load_game)(&game_info);
+    if !was_load_successful {
+        panic!("Rom Load was not successful");
+    }
+    return was_load_successful;
+}
+
+// Callback function for the libretro environment.
 unsafe extern "C" fn libretro_environment_callback(command: u32, return_data: *mut c_void) -> bool {
     match command {
         libretro_sys::ENVIRONMENT_GET_CAN_DUPE => {
@@ -22,31 +94,10 @@ unsafe extern "C" fn libretro_environment_callback(command: u32, return_data: *m
         }
         libretro_sys::ENVIRONMENT_SET_PIXEL_FORMAT => {
             let pixel_format = *(return_data as *const u32);
-            let pixel_format_as_enum = PixelFormat::from_uint(pixel_format).unwrap();
-            CURRENT_EMULATOR_STATE.pixel_format.0 = pixel_format_as_enum;
-            match pixel_format_as_enum {
-                PixelFormat::ARGB1555 => {
-                    println!(
-                        "Core will send us pixel data in the RETRO_PIXEL_FORMAT_0RGB1555 format"
-                    );
-                    CURRENT_EMULATOR_STATE.bytes_per_pixel = 2;
-                }
-                PixelFormat::RGB565 => {
-                    println!(
-                        "Core will send us pixel data in the RETRO_PIXEL_FORMAT_RGB565 format"
-                    );
-                    CURRENT_EMULATOR_STATE.bytes_per_pixel = 2;
-                }
-                PixelFormat::ARGB8888 => {
-                    println!(
-                        "Core will send us pixel data in the RETRO_PIXEL_FORMAT_XRGB8888 format"
-                    );
-                    CURRENT_EMULATOR_STATE.bytes_per_pixel = 4;
-                }
-                _ => {
-                    panic!("Core is trying to use an Unknown Pixel Format")
-                }
-            }
+            let sender = &PIXEL_FORMAT_CHANNEL.0; // Use the global sender
+            sender
+                .send(PixelFormat::from_uint(pixel_format).unwrap())
+                .expect("Failed to send pixel format");
             return true;
         }
         _ => println!(
@@ -57,15 +108,16 @@ unsafe extern "C" fn libretro_environment_callback(command: u32, return_data: *m
     false
 }
 
+// Represents a loaded libretro core with associated functions.
 pub struct Core {
-    dylib: Library,
+    pub dylib: Library,
     pub api: CoreAPI,
 }
 
 impl Core {
-    pub fn new(core_name: &String) -> Self {
+    pub fn new(mut state: EmulatorState) -> (Self, EmulatorState) {
         unsafe {
-            let dylib = Library::new(core_name).expect("Failed to load Core");
+            let dylib = Library::new(&state.library_name).expect("Failed to load Core");
 
             let core_api = CoreAPI {
                 retro_set_environment: *(dylib.get(b"retro_set_environment").unwrap()),
@@ -129,23 +181,30 @@ impl Core {
             };
             (core_api.retro_get_system_av_info)(&mut av_info);
             println!("AV Info: {:?}", &av_info);
-            CURRENT_EMULATOR_STATE.av_info = Some(av_info);
+            state.av_info = Some(av_info);
 
             // Construct and return a Core instance
-            Core {
-                dylib,
-                api: core_api,
-            }
+            (
+                Core {
+                    dylib,
+                    api: core_api,
+                },
+                state,
+            )
         }
     }
 }
 
+// Handles dropping of the Core, which could include cleanup tasks.
 impl Drop for Core {
     fn drop(&mut self) {
-        // If you need to do any cleanup when the Core is dropped, do it here.
+        // Cleanup code here...
     }
 }
 
+// Utility functions for managing save states and configuration files follow.
+
+// `get_save_state_path` computes the path for a save state file.
 fn get_save_state_path(
     save_directory: &String,
     game_file_name: &str,
@@ -180,7 +239,13 @@ fn get_save_state_path(
     Some(save_state_path)
 }
 
-pub unsafe fn save_state(core_api: &CoreAPI, save_directory: &String) {
+// `save_state` saves the current state of the emulator to a file.
+pub unsafe fn save_state(
+    core_api: &CoreAPI,
+    save_directory: &String,
+    rom_name: &String,
+    save_index: &u8,
+) {
     let save_state_buffer_size = (core_api.retro_serialize_size)();
     let mut state_buffer: Vec<u8> = vec![0; save_state_buffer_size];
     // Call retro_serialize to create the save state
@@ -188,12 +253,9 @@ pub unsafe fn save_state(core_api: &CoreAPI, save_directory: &String) {
         state_buffer.as_mut_ptr() as *mut c_void,
         save_state_buffer_size,
     );
-    let file_path = get_save_state_path(
-        save_directory,
-        &CURRENT_EMULATOR_STATE.rom_name,
-        &CURRENT_EMULATOR_STATE.current_save_slot,
-    )
-    .unwrap(); // hard coded save_slot to 0 for now
+
+    let file_path = get_save_state_path(save_directory, &rom_name, &save_index).unwrap();
+
     std::fs::write(&file_path, &state_buffer).unwrap();
     println!(
         "Save state saved to: {} with size: {}",
@@ -202,13 +264,15 @@ pub unsafe fn save_state(core_api: &CoreAPI, save_directory: &String) {
     );
 }
 
-pub unsafe fn load_state(core_api: &CoreAPI, save_directory: &String) {
-    let file_path = get_save_state_path(
-        save_directory,
-        &CURRENT_EMULATOR_STATE.rom_name,
-        &CURRENT_EMULATOR_STATE.current_save_slot,
-    )
-    .unwrap(); // Hard coded the save_slot to 0 for now
+// `load_state` loads the emulator state from a file.
+pub unsafe fn load_state(
+    core_api: &CoreAPI,
+    save_directory: &String,
+    rom_name: &String,
+    save_index: &u8,
+) {
+    let file_path = get_save_state_path(save_directory, &rom_name, &save_index).unwrap();
+
     let mut state_buffer = Vec::new();
     match File::open(&file_path) {
         Ok(mut file) => {
@@ -233,6 +297,7 @@ pub unsafe fn load_state(core_api: &CoreAPI, save_directory: &String) {
     }
 }
 
+// `get_retroarch_config_path` finds the path to the RetroArch configuration.
 fn get_retroarch_config_path() -> PathBuf {
     return match std::env::consts::OS {
         "windows" => PathBuf::from(env::var("APPDATA").ok().unwrap()).join("retroarch"),
@@ -242,6 +307,7 @@ fn get_retroarch_config_path() -> PathBuf {
     };
 }
 
+// `parse_retroarch_config` parses the RetroArch configuration file.
 fn parse_retroarch_config(config_file: &Path) -> Result<HashMap<String, String>, String> {
     let file = File::open(config_file).map_err(|e| format!("Failed to open file: {}", e))?;
     let reader = BufReader::new(file);
@@ -258,6 +324,7 @@ fn parse_retroarch_config(config_file: &Path) -> Result<HashMap<String, String>,
     Ok(config_map)
 }
 
+// `setup_config` merges various configuration sources into a single HashMap.
 pub fn setup_config() -> Result<HashMap<String, String>, String> {
     let retro_arch_config_path = get_retroarch_config_path();
     let our_config = parse_retroarch_config(Path::new("./rustroarch.cfg"));

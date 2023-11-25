@@ -1,127 +1,115 @@
+// This implementation is based on the guide provided by [RetroGameDeveloper/RetroReversing].
+// Original guide can be found at [https://www.retroreversing.com/CreateALibRetroFrontEndInRust].
+// Copyright (c) 2023 Nicholas Ricciuti
+
+// Import necessary modules from other files and crates
 mod audio;
 mod input;
 mod libretro;
 mod video;
-use clap::Parser;
-use gilrs::{Event, Gilrs};
-use libretro_sys::{CoreAPI, GameInfo, PixelFormat, SystemAvInfo};
-use minifb::{Key, KeyRepeat, Window, WindowOptions};
+use audio::AudioBuffer;
+use gilrs::{GamepadId, Gilrs, Event};
+use libretro_sys::PixelFormat;
+use minifb::{Key, Window, WindowOptions};
+use once_cell::sync::Lazy;
 use rodio::{OutputStream, Sink};
-use std::ffi::{c_void, CString};
-use std::sync::mpsc::channel;
-use std::{fs, ptr, thread};
+use std::sync::atomic::AtomicU8;
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::{Arc, Mutex};
+use std::thread;
 
-#[derive(Parser)]
-struct EmulatorState {
-    #[arg(help = "Sets the path to the ROM file to load", index = 1)]
-    rom_name: String,
-    #[arg(short = 'L', default_value = "default_library")]
-    library_name: String,
-    #[arg(skip)]
-    frame_buffer: Option<Vec<u32>>,
-    #[arg(skip)]
-    pixel_format: video::EmulatorPixelFormat,
-    #[arg(skip)]
-    bytes_per_pixel: u8,
-    #[arg(skip)]
-    screen_pitch: u32,
-    #[arg(skip)]
-    screen_width: u32,
-    #[arg(skip)]
-    screen_height: u32,
-    #[arg(skip)]
-    buttons_pressed: Option<Vec<i16>>,
-    #[arg(skip)]
-    current_save_slot: u8,
-    #[arg(skip)]
-    audio_data: Option<Vec<i16>>,
-    #[arg(skip)]
-    av_info: Option<SystemAvInfo>,
+// Define global static variables for handling input, pixel format, video, and audio data
+static BUTTONS_PRESSED: Lazy<Mutex<(Vec<i16>, Vec<i16>)>> =
+    Lazy::new(|| Mutex::new((vec![0; 16], vec![0; 16])));
+static BYTES_PER_PIXEL: AtomicU8 = AtomicU8::new(4); // Default value for bytes per pixel
+static PIXEL_FORMAT_CHANNEL: Lazy<(Sender<PixelFormat>, Arc<Mutex<Receiver<PixelFormat>>>)> =
+    Lazy::new(|| {
+        let (sender, receiver) = channel::<PixelFormat>();
+        (sender, Arc::new(Mutex::new(receiver)))
+    });
+static VIDEO_DATA_CHANNEL: Lazy<(Sender<VideoData>, Arc<Mutex<Receiver<VideoData>>>)> =
+    Lazy::new(|| {
+        let (sender, receiver) = channel::<VideoData>();
+        (sender, Arc::new(Mutex::new(receiver)))
+    });
+static AUDIO_DATA_CHANNEL: Lazy<(
+    Sender<Arc<Mutex<AudioBuffer>>>,
+    Arc<Mutex<Receiver<Arc<Mutex<AudioBuffer>>>>>,
+)> = Lazy::new(|| {
+    let (sender, receiver) = channel::<Arc<Mutex<AudioBuffer>>>();
+    (sender, Arc::new(Mutex::new(receiver)))
+});
+
+// Structure to hold video data
+struct VideoData {
+    frame_buffer: Vec<u32>,
+    width: u32,
+    height: u32,
+    pitch: u32,
 }
 
-static mut CURRENT_EMULATOR_STATE: EmulatorState = EmulatorState {
-    rom_name: String::new(),
-    library_name: String::new(),
-    frame_buffer: None,
-    pixel_format: video::EmulatorPixelFormat(PixelFormat::ARGB8888),
-    bytes_per_pixel: 4,
-    screen_pitch: 0,
-    screen_width: 0,
-    screen_height: 0,
-    buttons_pressed: None,
-    current_save_slot: 0,
-    audio_data: None,
-    av_info: None,
-};
-
-fn parse_command_line_arguments() -> EmulatorState {
-    let emulator_state = EmulatorState::parse();
-
-    println!("ROM name: {}", emulator_state.rom_name);
-    println!("Core Library name: {}", emulator_state.library_name);
-    return emulator_state;
-}
-
-unsafe fn load_rom_file(core_api: &CoreAPI, rom_name: &String) -> bool {
-    let rom_name_cptr = CString::new(rom_name.clone())
-        .expect("Failed to create CString")
-        .as_ptr();
-    let contents = fs::read(rom_name).expect("Failed to read file");
-    let data: *const c_void = contents.as_ptr() as *const c_void;
-    let game_info = GameInfo {
-        path: rom_name_cptr,
-        data,
-        size: contents.len(),
-        meta: ptr::null(),
-    };
-    let was_load_successful = (core_api.retro_load_game)(&game_info);
-    if (!was_load_successful) {
-        panic!("Rom Load was not successful");
-    }
-    return was_load_successful;
-}
-
-const WIDTH: usize = 256;
-const HEIGHT: usize = 140;
-
+// The main function, entry point of the application
 fn main() {
-    unsafe { CURRENT_EMULATOR_STATE = parse_command_line_arguments() };
+    // Parse command line arguments to get ROM and library names
+    let (rom_name, library_name) = libretro::parse_command_line_arguments();
+    // Initialize emulator state with default values
+    let mut current_state = libretro::EmulatorState {
+        rom_name,
+        library_name,
+        frame_buffer: None,
+        screen_pitch: 0,
+        screen_width: 0,
+        screen_height: 0,
+        current_save_slot: 0,
+        av_info: None,
+        pixel_format: video::EmulatorPixelFormat(PixelFormat::ARGB8888),
+        bytes_per_pixel: 0,
+    };
 
-    let mut window = Window::new("Rust Game", WIDTH, HEIGHT, WindowOptions::default())
-        .unwrap_or_else(|e| {
-            panic!("{}", e);
-        });
+    // Create a new window with specific options
+    let mut window = Window::new(
+        "Test", // Window title
+        256,    // Window width
+        144,    // Window height
+        WindowOptions {
+            resize: true, // Allow window resizing
+            ..WindowOptions::default()
+        },
+    )
+    .expect("Unable to open Window");
 
-    window.limit_update_rate(Some(std::time::Duration::from_micros(16600))); // ~60fps
+    // Limit window update rate to approximately 60 frames per second
+    window.limit_update_rate(Some(std::time::Duration::from_micros(16600)));
 
-    let core = libretro::Core::new(unsafe { &CURRENT_EMULATOR_STATE.library_name });
-    let core_api = &core.api;
-    // Audio Setup
-    let (_stream, stream_handle) = OutputStream::try_default().unwrap();
+    // Initialize the core of the emulator and update the emulator state
+    let (core, updated_state) = libretro::Core::new(current_state);
+    let core_api = &core.api; // Reference to the core API
+    current_state = updated_state;
 
-    // Create a channel for passing audio samples from the main thread to the audio thread
-    let (sender, receiver) = channel();
+    // Extract the audio sample rate from the emulator state
+    let sample_rate = current_state
+        .av_info
+        .as_ref()
+        .map_or(0.0, |av_info| av_info.timing.sample_rate);
 
-    // Spawn a new thread to play back audio
-    let audio_thread = thread::spawn(move || {
+    // Spawn a new thread for audio handling
+    let _audio_thread = thread::spawn(move || {
         println!("Audio Thread Started");
-        let sample_rate = unsafe {
-            match &CURRENT_EMULATOR_STATE.av_info {
-                Some(av_info) => av_info.timing.sample_rate,
-                None => 0.0,
-            }
-        };
         let (_stream, stream_handle) = OutputStream::try_default().unwrap();
         let sink = Sink::try_new(&stream_handle).unwrap();
         loop {
-            // Receive the next set of audio samples from the channel
-            let audio_samples = receiver.recv().unwrap();
-            unsafe {
-                audio::play_audio(&sink, audio_samples, sample_rate as u32);
+            let receiver = AUDIO_DATA_CHANNEL.1.lock().unwrap();
+            // Play audio in a loop
+            for buffer_arc in receiver.try_iter() {
+                let buffer = buffer_arc.lock().unwrap();
+                unsafe {
+                    audio::play_audio(&sink, &*buffer, sample_rate as u32);
+                }
             }
         }
     });
 
+    // Set up libretro callbacks for video, input, and audio
     unsafe {
         (core_api.retro_init)();
         (core_api.retro_set_video_refresh)(video::libretro_set_video_refresh_callback);
@@ -129,137 +117,62 @@ fn main() {
         (core_api.retro_set_input_state)(input::libretro_set_input_state_callback);
         (core_api.retro_set_audio_sample)(audio::libretro_set_audio_sample_callback);
         (core_api.retro_set_audio_sample_batch)(audio::libretro_set_audio_sample_batch_callback);
-        println!("About to load ROM: {}", &CURRENT_EMULATOR_STATE.rom_name);
-        load_rom_file(core_api, &CURRENT_EMULATOR_STATE.rom_name);
+        println!("About to load ROM: {}", &current_state.rom_name);
+        // Load the ROM file
+        libretro::load_rom_file(core_api, &current_state.rom_name);
     }
 
-    let mut this_frames_pressed_buttons = vec![0; 16];
-
+    // Prepare configurations for input handling
     let config = libretro::setup_config().unwrap();
-
     let key_device_map = input::key_device_map(&config);
+    let joypad_device_map = input::setup_joypad_device_map(&config);
+    let mut gilrs = Gilrs::new().unwrap(); // Initialize gamepad handling
+    let mut active_gamepad: Option<GamepadId> = None;
 
-    let joypad_device_map = input::setup_joypad_device_map();
-
-    let mut gilrs = Gilrs::new().unwrap();
-
-    // Iterate over all connected gamepads
-    for (_id, gamepad) in gilrs.gamepads() {
-        println!("{} is {:?}", gamepad.name(), gamepad.power_info());
-    }
-
-    let mut active_gamepad = None;
-
+    // Main application loop
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        // Gamepad input Handling
-        // Examine new events to check which gamepad is currently being used
-        while let Some(Event { id, event, time }) = gilrs.next_event() {
-            // println!("{:?} New event from {}: {:?}", time, id, event);
-            active_gamepad = Some(id);
-        }
+        {
+            let mut buttons = BUTTONS_PRESSED.lock().unwrap();
+            let buttons_pressed = &mut buttons.0;
+            let mut game_pad_active: bool = false;
 
-        // Now Lets check what buttons are pressed and map them to the libRetro buttons
-        if let Some(gamepad) = active_gamepad.map(|id| gilrs.gamepad(id)) {
-            for button in input::buttonArray {
-                if gamepad.is_pressed(button) {
-                    println!("Button Pressed: {:?}", button);
-                    let libretro_button = joypad_device_map.get(&button).unwrap();
-                    this_frames_pressed_buttons[*libretro_button] = 1;
-                }
+            while let Some(Event { id, .. }) = gilrs.next_event() {
+                // println!("{:?} New event from {}: {:?}", time, id, event);
+                active_gamepad = Some(id);
             }
-        }
 
-        let mini_fb_keys_pressed = window.get_keys_pressed(KeyRepeat::No);
-        if !mini_fb_keys_pressed.is_empty() {
-            for key in mini_fb_keys_pressed {
-                let key_as_string = format!("{:?}", key).to_ascii_lowercase();
-
-                if let Some(device_id) = key_device_map.get(&key_as_string) {
-                    this_frames_pressed_buttons[*device_id] = 1;
-                }
-                if &key_as_string == &config["input_save_state"] {
-                    unsafe {
-                        libretro::save_state(&core_api, &config["savestate_directory"]);
-                    } // f2
-                    continue;
-                }
-                if &key_as_string == &config["input_load_state"] {
-                    unsafe {
-                        libretro::load_state(&core_api, &config["savestate_directory"]);
-                    } // f4
-                    continue;
-                }
-                if &key_as_string == &config["input_state_slot_increase"] {
-                    unsafe {
-                        if CURRENT_EMULATOR_STATE.current_save_slot != 255 {
-                            CURRENT_EMULATOR_STATE.current_save_slot += 1;
-                            println!(
-                                "Current save slot increased to: {}",
-                                CURRENT_EMULATOR_STATE.current_save_slot
-                            );
-                        }
-                    }
-                    continue;
-                }
-
-                if &key_as_string == &config["input_state_slot_decrease"] {
-                    unsafe {
-                        if CURRENT_EMULATOR_STATE.current_save_slot != 0 {
-                            CURRENT_EMULATOR_STATE.current_save_slot -= 1;
-                            println!(
-                                "Current save slot decreased to: {}",
-                                CURRENT_EMULATOR_STATE.current_save_slot
-                            );
-                        }
-                    }
-                    continue;
-                }
-
-                println!("Unhandled Key Pressed: {} ", key_as_string);
-            }
-        }
-
-        let mini_fb_keys_released = window.get_keys_released();
-        for key in &mini_fb_keys_released {
-            let key_as_string = format!("{:?}", key).to_ascii_lowercase();
-
-            if let Some(device_id) = key_device_map.get(&key_as_string) {
-                this_frames_pressed_buttons[*device_id] = 0;
-            } else {
-                println!(
-                    "Unhandled Key Pressed: {} input_player1_a: {}",
-                    key_as_string, config["input_player1_a"]
+            // Handle gamepad and keyboard input
+            if let Some(gamepad) = active_gamepad {
+                input::handle_gamepad_input(
+                    &joypad_device_map,
+                    &gilrs,
+                    &Some(gamepad),
+                    buttons_pressed,
                 );
+                game_pad_active = true;
             }
+            input::handle_keyboard_input(
+                core_api,
+                &window,
+                &mut current_state,
+                buttons_pressed,
+                &key_device_map,
+                &config,
+                game_pad_active,
+            );
         }
-
         unsafe {
+            // Run one frame of the emulator
             (core_api.retro_run)();
-
-            audio::send_audio_to_thread(&sender);
-
-            match &CURRENT_EMULATOR_STATE.frame_buffer {
-                Some(buffer) => {
-                    let width = (CURRENT_EMULATOR_STATE.screen_pitch
-                        / CURRENT_EMULATOR_STATE.bytes_per_pixel as u32)
-                        as usize;
-                    let height = CURRENT_EMULATOR_STATE.screen_height as usize;
-                    let slice_of_pixel_buffer: &[u32] =
-                        std::slice::from_raw_parts(buffer.as_ptr() as *const u32, buffer.len()); // convert to &[u32] slice reference
-                    if slice_of_pixel_buffer.len() < width * height * 4 {
-                        // The frame buffer isn't big enough so lets add additional pixels just so we can display it
-                        let mut vec: Vec<u32> = slice_of_pixel_buffer.to_vec();
-                        vec.resize((width * height * 4) as usize, 0x0000FFFF); // Add any missing pixels with colour blue
-                        window.update_with_buffer(&vec, width, height).unwrap();
-                    } else {
-                        let _ = window.update_with_buffer(&slice_of_pixel_buffer, width, height);
-                    }
-                }
-                None => {
-                    println!("We don't have a buffer to display");
-                }
+            // If needed, set up pixel format
+            if current_state.bytes_per_pixel == 0 {
+                current_state = video::set_up_pixel_format(current_state);
             }
-            CURRENT_EMULATOR_STATE.buttons_pressed = Some(this_frames_pressed_buttons.clone());
+
+            // Render the frame
+            let rendered_frame = video::render_frame(current_state, window);
+            current_state = rendered_frame.0;
+            window = rendered_frame.1;
         }
     }
 }
