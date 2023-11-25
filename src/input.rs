@@ -3,7 +3,11 @@
 // Copyright (c) 2023 Nicholas Ricciuti
 
 use gilrs::{Button, GamepadId, Gilrs};
-use libretro_sys::{CoreAPI, DEVICE_ID_JOYPAD_R, DEVICE_ID_JOYPAD_A, DEVICE_ID_JOYPAD_B, DEVICE_ID_JOYPAD_X, DEVICE_ID_JOYPAD_Y, DEVICE_ID_JOYPAD_L, DEVICE_ID_JOYPAD_DOWN, DEVICE_ID_JOYPAD_UP, DEVICE_ID_JOYPAD_RIGHT, DEVICE_ID_JOYPAD_LEFT, DEVICE_ID_JOYPAD_START, DEVICE_ID_JOYPAD_SELECT};
+use libretro_sys::{
+    CoreAPI, DEVICE_ID_JOYPAD_A, DEVICE_ID_JOYPAD_B, DEVICE_ID_JOYPAD_DOWN, DEVICE_ID_JOYPAD_L,
+    DEVICE_ID_JOYPAD_LEFT, DEVICE_ID_JOYPAD_R, DEVICE_ID_JOYPAD_RIGHT, DEVICE_ID_JOYPAD_SELECT,
+    DEVICE_ID_JOYPAD_START, DEVICE_ID_JOYPAD_UP, DEVICE_ID_JOYPAD_X, DEVICE_ID_JOYPAD_Y,
+};
 use minifb::{KeyRepeat, Window};
 use std::collections::HashMap;
 
@@ -16,51 +20,51 @@ pub fn key_device_map(config: &HashMap<String, String>) -> HashMap<String, usize
     HashMap::from([
         (
             config["input_player1_a"].clone(),
-            libretro_sys::DEVICE_ID_JOYPAD_A as usize,
+            DEVICE_ID_JOYPAD_A as usize,
         ),
         (
             config["input_player1_b"].clone(),
-            libretro_sys::DEVICE_ID_JOYPAD_B as usize,
+            DEVICE_ID_JOYPAD_B as usize,
         ),
         (
             config["input_player1_x"].clone(),
-            libretro_sys::DEVICE_ID_JOYPAD_X as usize,
+            DEVICE_ID_JOYPAD_X as usize,
         ),
         (
             config["input_player1_y"].clone(),
-            libretro_sys::DEVICE_ID_JOYPAD_Y as usize,
+            DEVICE_ID_JOYPAD_Y as usize,
         ),
         (
             config["input_player1_l"].clone(),
-            libretro_sys::DEVICE_ID_JOYPAD_L as usize,
+            DEVICE_ID_JOYPAD_L as usize,
         ),
         (
             config["input_player1_r"].clone(),
-            libretro_sys::DEVICE_ID_JOYPAD_R as usize,
+            DEVICE_ID_JOYPAD_R as usize,
         ),
         (
             config["input_player1_down"].clone(),
-            libretro_sys::DEVICE_ID_JOYPAD_DOWN as usize,
+            DEVICE_ID_JOYPAD_DOWN as usize,
         ),
         (
             config["input_player1_up"].clone(),
-            libretro_sys::DEVICE_ID_JOYPAD_UP as usize,
+            DEVICE_ID_JOYPAD_UP as usize,
         ),
         (
             config["input_player1_right"].clone(),
-            libretro_sys::DEVICE_ID_JOYPAD_RIGHT as usize,
+            DEVICE_ID_JOYPAD_RIGHT as usize,
         ),
         (
             config["input_player1_left"].clone(),
-            libretro_sys::DEVICE_ID_JOYPAD_LEFT as usize,
+            DEVICE_ID_JOYPAD_LEFT as usize,
         ),
         (
             config["input_player1_start"].clone(),
-            libretro_sys::DEVICE_ID_JOYPAD_START as usize,
+            DEVICE_ID_JOYPAD_START as usize,
         ),
         (
             config["input_player1_select"].clone(),
-            libretro_sys::DEVICE_ID_JOYPAD_SELECT as usize,
+            DEVICE_ID_JOYPAD_SELECT as usize,
         ),
     ])
 }
@@ -68,52 +72,88 @@ pub fn key_device_map(config: &HashMap<String, String>) -> HashMap<String, usize
 pub fn setup_joypad_device_map(config: &HashMap<String, String>) -> HashMap<String, usize> {
     HashMap::from([
         (
-            config["input_player1_a_btn"].clone(),
-            libretro_sys::DEVICE_ID_JOYPAD_A as usize,
+            config
+                .get("input_player1_a_btn")
+                .unwrap_or(&DEVICE_ID_JOYPAD_A.to_string())
+                .clone(),
+            DEVICE_ID_JOYPAD_A as usize,
         ),
         (
-            config["input_player1_b_btn"].clone(),
-            libretro_sys::DEVICE_ID_JOYPAD_B as usize,
+            config
+                .get("input_player1_b_btn")
+                .unwrap_or(&DEVICE_ID_JOYPAD_B.to_string())
+                .clone(),
+            DEVICE_ID_JOYPAD_B as usize,
         ),
         (
-            config["input_player1_x_btn"].clone(),
-            libretro_sys::DEVICE_ID_JOYPAD_X as usize,
+            config
+                .get("input_player1_x_btn")
+                .unwrap_or(&DEVICE_ID_JOYPAD_X.to_string())
+                .clone(),
+            DEVICE_ID_JOYPAD_X as usize,
         ),
         (
-            config["input_player1_y_btn"].clone(),
-            libretro_sys::DEVICE_ID_JOYPAD_Y as usize,
+            config
+                .get("input_player1_y_btn")
+                .unwrap_or(&DEVICE_ID_JOYPAD_Y.to_string())
+                .clone(),
+            DEVICE_ID_JOYPAD_Y as usize,
         ),
         (
-            config["input_player1_l_btn"].clone(),
-            libretro_sys::DEVICE_ID_JOYPAD_L as usize,
+            config
+                .get("input_player1_l_btn")
+                .unwrap_or(&DEVICE_ID_JOYPAD_L.to_string())
+                .clone(),
+            DEVICE_ID_JOYPAD_L as usize,
         ),
         (
-            config["input_player1_r_btn"].clone(),
-            libretro_sys::DEVICE_ID_JOYPAD_R as usize,
+            config
+                .get("input_player1_r_btn")
+                .unwrap_or(&DEVICE_ID_JOYPAD_R.to_string())
+                .clone(),
+            DEVICE_ID_JOYPAD_R as usize,
         ),
         (
-            config["input_player1_down_btn"].clone(),
-            libretro_sys::DEVICE_ID_JOYPAD_DOWN as usize,
+            config
+                .get("input_player1_down_btn")
+                .unwrap_or(&DEVICE_ID_JOYPAD_DOWN.to_string())
+                .clone(),
+            DEVICE_ID_JOYPAD_DOWN as usize,
         ),
         (
-            config["input_player1_up_btn"].clone(),
-            libretro_sys::DEVICE_ID_JOYPAD_UP as usize,
+            config
+                .get("input_player1_up_btn")
+                .unwrap_or(&DEVICE_ID_JOYPAD_UP.to_string())
+                .clone(),
+            DEVICE_ID_JOYPAD_UP as usize,
         ),
         (
-            config["input_player1_right_btn"].clone(),
-            libretro_sys::DEVICE_ID_JOYPAD_RIGHT as usize,
+            config
+                .get("input_player1_right_btn")
+                .unwrap_or(&DEVICE_ID_JOYPAD_RIGHT.to_string())
+                .clone(),
+            DEVICE_ID_JOYPAD_RIGHT as usize,
         ),
         (
-            config["input_player1_left_btn"].clone(),
-            libretro_sys::DEVICE_ID_JOYPAD_LEFT as usize,
+            config
+                .get("input_player1_left_btn")
+                .unwrap_or(&DEVICE_ID_JOYPAD_LEFT.to_string())
+                .clone(),
+            DEVICE_ID_JOYPAD_LEFT as usize,
         ),
         (
-            config["input_player1_start_btn"].clone(),
-            libretro_sys::DEVICE_ID_JOYPAD_START as usize,
+            config
+                .get("input_player1_start_btn")
+                .unwrap_or(&DEVICE_ID_JOYPAD_START.to_string())
+                .clone(),
+            DEVICE_ID_JOYPAD_START as usize,
         ),
         (
-            config["input_player1_select_btn"].clone(),
-            libretro_sys::DEVICE_ID_JOYPAD_SELECT as usize,
+            config
+                .get("input_player1_select_btn")
+                .unwrap_or(&DEVICE_ID_JOYPAD_SELECT.to_string())
+                .clone(),
+            DEVICE_ID_JOYPAD_SELECT as usize,
         ),
     ])
 }
